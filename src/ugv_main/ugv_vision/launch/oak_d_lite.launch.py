@@ -32,6 +32,18 @@ def launch_setup(context, *args, **kwargs):
     
     # Return a list of actions to be executed
     return [
+        Node(
+            package='ugv_vision',
+            executable='depth_preview',
+            condition=IfCondition(LaunchConfiguration('depth_preview')),
+            parameters=[{
+                'input_topic': name + '/stereo/image_raw',
+                'output_topic': name + '/stereo/depth_preview/compressed',
+            }],
+            output='screen',
+            respawn=True,
+            respawn_delay=3.0,
+        ),
         # Include the camera.launch.py launch file from the depthai_ros_driver package
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -80,6 +92,7 @@ def generate_launch_description():
             default_value=os.path.join(get_package_share_directory("ugv_vision"), "config", "oak_d_lite.yaml"),
         ),
         DeclareLaunchArgument("rectify_rgb", default_value="False"),
+        DeclareLaunchArgument('depth_preview', default_value='true'),
     ]
 
     # Return the launch description

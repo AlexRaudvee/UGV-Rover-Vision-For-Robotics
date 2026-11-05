@@ -4,5 +4,12 @@
       i_enable_imu: false
       i_enable_ir: false
       i_nn_type: none
+      i_restart_on_diagnostics_error: true
+    rgb:
+      i_fps: 5.0
+    left:
+      i_fps: 5.0
+    right:
+      i_fps: 5.0
     stereo:
       i_subpixel: true

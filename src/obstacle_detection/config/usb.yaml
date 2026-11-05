@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    rgb_topic: /image_raw
+    camera_info_topic: /camera_info
+    use_depth: false
+    rectified: false
+    frame_id: obstacle_histogram_usb
+    sensor_label: USB RGB - approximate width-based ranges

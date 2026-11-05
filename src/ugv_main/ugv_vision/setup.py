@@ -24,6 +24,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'depth_preview = ugv_vision.depth_preview:main',
+            'usb_camera_supervisor = ugv_vision.usb_camera_supervisor:main',
             'color_track = ugv_vision.color_track:main',
             'kcf_track = ugv_vision.kcf_track:main',
             'gesture_ctrl = ugv_vision.gesture_ctrl:main',

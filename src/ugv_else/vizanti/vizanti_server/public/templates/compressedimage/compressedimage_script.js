@@ -107,7 +107,7 @@ async function getImage(src) {
     return new Promise((resolve, reject) => {
         let img = new Image();
         img.onload = () => resolve(src);
-        img.onerror = () => reject(src);
+        img.onerror = () => reject(new Error('Cannot decode this image. Select a JPEG/PNG preview topic.'));
         img.src = src;
     });
 }
@@ -125,32 +125,48 @@ function connect(){
 	if(image_topic !== undefined){
 		image_topic.unsubscribe(listener);
 	}
+	if(topic.endsWith('/compressedDepth')) {
+		status.setError('Select a colorized depth preview /compressed topic, rather than compressedDepth.');
+		return;
+	}
 
 	status.setWarn("No data received.");
+	throttle.value = Math.max(200, parseInt(throttle.value) || 500);
 
 	image_topic = new ROSLIB.Topic({
 		ros : rosbridge.ros,
 		name : topic,
 		messageType : 'sensor_msgs/msg/CompressedImage',
-		throttle_rate: parseInt(throttle.value)
+		throttle_rate: parseInt(throttle.value),
+		queue_length: 1
 	});
 	
 	let received = false;
 	listener = image_topic.subscribe(async (msg) => {  
-		const src = 'data:image/jpeg;base64,' + msg.data
+		if ((msg.format || '').includes('compressedDepth')) {
+			status.setError('Depth transport needs a colorized preview; select a depth-preview /compressed topic.');
+			return;
+		}
+		if (!msg.data || msg.data.length === 0) {
+			status.setError('Empty image payload. For depth, select a colorized preview topic.');
+			return;
+		}
+		const mime = /\bpng\b/i.test(msg.format || '') ? 'image/png' : 'image/jpeg';
+		const src = 'data:' + mime + ';base64,' + msg.data;
 
 		getImage(src)
 			.then(() => {
 				canvas.src = src;
+				status.setOK();
 				if(!received){
 					displayImageOffset(img_offset_x, img_offset_y);
-					status.setOK();
+					received = true;
 				}
 			})
 			.catch((e) => {
 				canvas.src = stock_images["error"];
 				displayImageOffset(img_offset_x, img_offset_y);
-				status.setError(e.message);
+				status.setError(e.message || 'Cannot decode this image.');
 			});
 	});
 

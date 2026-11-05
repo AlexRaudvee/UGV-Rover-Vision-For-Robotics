@@ -1,6 +1,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <set>
 #include <string>
 
 #include "rclcpp/rclcpp.hpp"
@@ -12,8 +13,11 @@ class TfConsolidator:public rclcpp::Node{
 		bool updated;
 		std::map<std::string, geometry_msgs::msg::TransformStamped> transforms;
 		std::map<std::string, rclcpp::Time> transform_timeout;
+		std::set<std::string> static_frames;
+		std::chrono::steady_clock::time_point last_publish = std::chrono::steady_clock::now();
 
 		rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub;
+		rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr static_tf_sub;
 		rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf_pub;
 		rclcpp::TimerBase::SharedPtr clear_timer;
 		rclcpp::TimerBase::SharedPtr publish_timer;
@@ -21,11 +25,19 @@ class TfConsolidator:public rclcpp::Node{
 		//subscribes to all /tf frames published separately by different nodes and consolidates them into one throttled message
 		TfConsolidator():Node("vizanti_tf_consolidator"),  updated(false){
 			tf_sub = create_subscription<tf2_msgs::msg::TFMessage>("/tf", rclcpp::QoS(20), std::bind(&TfConsolidator::tf_callback, this, std::placeholders::_1));
+			static_tf_sub = create_subscription<tf2_msgs::msg::TFMessage>(
+				"/tf_static", rclcpp::QoS(1).transient_local(),
+				[this](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
+					for (const auto &transform : msg->transforms) {
+						transforms[transform.child_frame_id] = transform;
+						static_frames.insert(transform.child_frame_id);
+					}
+					updated = true;
+				});
 			tf_pub = create_publisher<tf2_msgs::msg::TFMessage>(
 				"/vizanti/tf_consolidated",
-				rclcpp::QoS(10)
+				rclcpp::QoS(1)
 					.durability(RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL) //latched in case there's no tf activity so that the web client can set itself up
-					.lifespan(rclcpp::Duration(0, 66000000))  // 66ms
 			);
 			clear_timer = create_wall_timer(std::chrono::seconds(5), std::bind(&TfConsolidator::clear_old_tfs, this));
 			publish_timer = create_wall_timer(std::chrono::milliseconds(33), std::bind(&TfConsolidator::publish, this));
@@ -38,6 +50,10 @@ class TfConsolidator:public rclcpp::Node{
 			auto current_time = rclcpp::Clock().now();
 			for (auto it = transforms.begin(); it != transforms.end(); /* no increment */) {
 				const auto key = it->first;
+				if (static_frames.count(key)) {
+					++it;
+					continue;
+				}
 				if (current_time.seconds() - transform_timeout[key].seconds() > 10.0){
 					const auto parent = it->second.header.frame_id;
 
@@ -56,7 +72,9 @@ class TfConsolidator:public rclcpp::Node{
 
 		//send all frames at ~30 hz, so websocket throttling can skip packets if congested
 		void publish(){
-			if (!updated){
+			auto now = std::chrono::steady_clock::now();
+			// Volatile web subscriptions also need a snapshot when the robot is stationary.
+			if (!updated && now - last_publish < std::chrono::seconds(1)){
 				return;
 			}
 
@@ -65,6 +83,7 @@ class TfConsolidator:public rclcpp::Node{
 				msg.transforms.push_back(entry.second);
 			}
 			updated = false;
+			last_publish = now;
 			tf_pub->publish(msg);
 		}
 

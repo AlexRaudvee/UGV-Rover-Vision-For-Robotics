@@ -12,17 +12,19 @@ def generate_launch_description():
     default_widget_config = launch.substitutions.LaunchConfiguration('default_widget_config', default='') #e.g. ~/your_custom_config.json
 
     #rosbridge internal params
-    unregister_timeout = launch.substitutions.LaunchConfiguration('unregister_timeout', default='9999999.9')
+    unregister_timeout = launch.substitutions.LaunchConfiguration('unregister_timeout', default='5.0')
     retry_startup_delay = launch.substitutions.LaunchConfiguration('retry_startup_delay', default='10.0')
     fragment_timeout = launch.substitutions.LaunchConfiguration('fragment_timeout', default='30')
     delay_between_messages = launch.substitutions.LaunchConfiguration('delay_between_messages', default='0')
-    max_message_size = launch.substitutions.LaunchConfiguration('max_message_size', default='999999999')
+    max_message_size = launch.substitutions.LaunchConfiguration('max_message_size', default='10000000')
 
     rosbridge_node = launch_ros.actions.Node(
         name='vizanti_rosbridge',
         package='rosbridge_server',
         executable='rosbridge_websocket',
         output='screen',
+        respawn=True,
+        respawn_delay=3.0,
         parameters=[
             {'authenticate': False},
             {'port': port_rosbridge},
@@ -32,7 +34,9 @@ def generate_launch_description():
             {'delay_between_messages': delay_between_messages},
             {'max_message_size': max_message_size},
             {'unregister_timeout': unregister_timeout},
-            {'use_compression': True}
+            {'use_compression': True},
+            {'default_call_service_timeout': 5.0},
+            {'call_services_in_new_thread': True},
         ]
     )
 

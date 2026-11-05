@@ -1,4 +1,5 @@
 import os
+import yaml
 
 # Import the necessary modules from the ament_index_python package
 from ament_index_python.packages import get_package_share_directory
@@ -21,13 +22,17 @@ def generate_launch_description():
     pkg_dir = get_package_share_directory('ugv_vision')
     # Get the path to the params.yaml file
     param_file = os.path.join(pkg_dir, 'config', 'params.yaml') 
+    with open(param_file) as config:
+        camera_params = yaml.safe_load(config)['/**']['ros__parameters']
     
     # Create a node for the usb_cam package
     camera_node = Node(
-            package='usb_cam', 
-            executable='usb_cam_node_exe', 
+            package='ugv_vision',
+            executable='usb_camera_supervisor',
             name='usb_cam',
-            parameters= [param_file]
+            arguments=['--device', camera_params['video_device']],
+            parameters=[param_file],
+            output='screen',
             #remappings=camera.remappings
     )
 
