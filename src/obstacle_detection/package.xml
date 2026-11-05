@@ -1,10 +1,11 @@
 <?xml version="1.0"?>
 <package format="3">
   <name>obstacle_detection</name>
-  <version>0.1.0</version>
-  <description>Black-obstacle detection and camera-relative polar histograms for Lab 1.</description>
+  <version>0.2.0</version>
+  <description>Calibrated RGB and LiDAR fusion for measured black obstacle widths.</description>
   <maintainer email="jetson@example.com">jetson</maintainer>
   <license>Apache-2.0</license>
+  <exec_depend>object_detection</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>

@@ -5,8 +5,8 @@ import math
 import numpy as np
 import pytest
 
-from obstacle_detection.histogram import PolarHistogram
-from obstacle_detection.perception import Detection
+from polar_hist.histogram import PolarHistogram
+from object_detection.perception import Detection
 
 
 def obstacle(low=10, high=25, distance=1.0):

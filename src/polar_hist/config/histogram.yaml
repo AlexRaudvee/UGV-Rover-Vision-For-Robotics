@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    object_topic: /object_detection/detections
+    obstacle_topic: /obstacle_detection/detections
+    bin_degrees: 2.0
+    rate_hz: 5.0
+    stale_after_s: 0.8
+    gap_min_width_m: 0.35
+    side_margin_m: 0.0
+    display_range_m: 3.0
+    plot_frame_id: base_link
+    frame_prefix: polar_hist

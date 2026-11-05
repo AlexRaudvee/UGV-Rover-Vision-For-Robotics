@@ -1,0 +1,106 @@
+{
+  "navbar": [
+    {
+      "type": "settings",
+      "id": "settings_default"
+    },
+    {
+      "type": "rosbridge",
+      "id": "rosbridge_default"
+    },
+    {
+      "type": "compressedimage",
+      "id": "perception_rgb"
+    },
+    {
+      "type": "compressedimage",
+      "id": "perception_depth"
+    },
+    {
+      "type": "compressedimage",
+      "id": "perception_depth_debug"
+    },
+    {
+      "type": "compressedimage",
+      "id": "perception_lidar_debug"
+    },
+    {
+      "type": "compressedimage",
+      "id": "perception_depth_hist"
+    },
+    {
+      "type": "compressedimage",
+      "id": "perception_lidar_hist"
+    }
+  ],
+  "view": {
+    "center": {
+      "x": 0,
+      "y": 0
+    },
+    "scale": 50
+  },
+  "perception_rgb": {
+    "topic": "/oak/rgb/image_rect/compressed",
+    "opacity": "1",
+    "throttle": "200",
+    "width": "32",
+    "img_offset_x": "16",
+    "img_offset_y": "22",
+    "rotation": "0"
+  },
+  "perception_depth": {
+    "topic": "/object_detection/depth/compressed",
+    "opacity": "1",
+    "throttle": "200",
+    "width": "32",
+    "img_offset_x": "49",
+    "img_offset_y": "22",
+    "rotation": "0"
+  },
+  "perception_depth_debug": {
+    "topic": "/object_detection/debug/compressed",
+    "opacity": "1",
+    "throttle": "200",
+    "width": "32",
+    "img_offset_x": "16",
+    "img_offset_y": "68",
+    "rotation": "0"
+  },
+  "perception_lidar_debug": {
+    "topic": "/obstacle_detection/debug/compressed",
+    "opacity": "1",
+    "throttle": "200",
+    "width": "32",
+    "img_offset_x": "49",
+    "img_offset_y": "68",
+    "rotation": "0"
+  },
+  "perception_depth_hist": {
+    "topic": "/polar_hist/object/histogram/compressed",
+    "opacity": "1",
+    "throttle": "200",
+    "width": "33",
+    "img_offset_x": "83",
+    "img_offset_y": "22",
+    "rotation": "0"
+  },
+  "perception_lidar_hist": {
+    "topic": "/polar_hist/obstacle/histogram/compressed",
+    "opacity": "1",
+    "throttle": "200",
+    "width": "33",
+    "img_offset_x": "83",
+    "img_offset_y": "68",
+    "rotation": "0"
+  },
+  "layout_version": "measured-perception-2",
+  "managed_widgets": [
+    "perception_rgb",
+    "perception_depth",
+    "perception_depth_debug",
+    "perception_lidar_debug",
+    "perception_depth_hist",
+    "perception_lidar_hist"
+  ]
+}

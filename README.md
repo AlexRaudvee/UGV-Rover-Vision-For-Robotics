@@ -1,6 +1,98 @@
 # ugv_ws 
 ## Workspace to use ROS2 Humble with Waveshare's UGV Rover
 
+## Daily startup on rover-04
+
+The existing `ugv_jetson_ros_humble` container mounts `/home/jetson` on the robot
+at `/home/ws` inside the container. Editing `~/ugv_ws/src` on the host therefore
+updates `/home/ws/ugv_ws/src` immediately. Building packages and launching their
+nodes are separate steps; neither requires rebuilding this Docker image.
+
+From an SSH terminal on the **robot host**, stop any previous ROS launch sessions
+with Ctrl+C, then run:
+
+```bash
+cd ~/ugv_ws
+bash start_rover.sh --build
+```
+
+This starts the existing container if necessary, builds the project packages,
+and launches the motor interface, sensor feedback, odometry, IMU filter, LD19,
+robot transforms, USB and OAK cameras, Vizanti, both measured black-object
+detectors, and their polar histograms together.
+Leave this terminal open. Ctrl+C stops this foreground ROS session; the container
+remains running. This does not install a service that launches ROS at boot or on
+every `docker start`.
+
+On later runs without source changes:
+
+```bash
+bash start_rover.sh
+```
+
+Build without starting nodes using `bash start_rover.sh --build-only`. The build
+assumes the original workspace dependencies are already installed and built.
+Rebuild after changing package metadata, launch/configuration files, or source
+code, then restart the affected nodes to load the new version. This is an
+incremental build and does not clear the workspace. Docker image changes are
+only needed when changing the image's installed environment; persist those
+dependency changes in the Docker image definition if the container is recreated.
+
+Choose which components run in
+`src/ugv_main/ugv_bringup/launch/rover.launch.py`. For example, use the USB detector
+and skip the OAK driver with:
+
+```bash
+bash start_rover.sh obstacle_camera:=usb objects:=false oak_camera:=false
+```
+
+The launch arguments `base`, `usb_camera`, `oak_camera`, `vizanti`, `objects`,
+`obstacles`, and `polar_hist` each default to `true`. Keep the detector's selected camera enabled. The base
+launch supplies the robot transforms, so this session does not additionally
+launch `lab1_view.launch.py`.
+
+On your **laptop**, open `http://10.0.80.4:5100` in a browser while connected to
+the robot's network. This address was checked on rover-04; it can change. Vizanti
+also needs TCP port 5001 for its WebSocket connection. The container uses host
+networking, so no Docker port mappings are needed. Alternatively, keep this
+command running in a laptop terminal and open `http://localhost:5100`:
+
+```bash
+ssh -N -L 5100:127.0.0.1:5100 -L 5001:127.0.0.1:5001 jetson@10.0.80.4
+```
+
+To verify actual running nodes and data, use a second SSH terminal on the robot:
+
+```bash
+docker exec -it ugv_jetson_ros_humble bash
+source /opt/ros/humble/setup.bash
+source /home/ws/ugv_ws/install/setup.bash
+export ROS_DOMAIN_ID=4
+ros2 pkg executables obstacle_detection
+ros2 node list
+ros2 topic hz /polar_hist/obstacle/histogram/compressed
+```
+
+`ros2 pkg executables` confirms installation; `/obstacle_detection/detector` in
+the node list confirms it is running. Histogram messages confirm output, but
+can also report stale/missing camera input. Inspect
+`ros2 topic echo /obstacle_detection/detections --once` and the debug image to
+check the input's freshness. Add Compressed Image widgets in Vizanti for
+`/obstacle_detection/debug/compressed` and
+`/polar_hist/obstacle/histogram/compressed`.
+
+`object_detection` now measures black blob widths using registered OAK depth;
+`obstacle_detection` uses projected LiDAR ranges. Both use a nominal 23–30 cm size band with bounded measurement tolerance.
+`polar_hist` plots each detector and marks measured openings of at least 35 cm.
+The rover launch supplies a six-widget Vizanti layout for new browser sessions.
+For existing layouts, import `src/polar_hist/config/vizanti_layout.json` in Vizanti
+Settings, or add its topics manually. RGB uses `/oak/rgb/image_rect/compressed`;
+the metric depth preview is `/object_detection/depth/compressed`. The depth
+histogram is `/polar_hist/object/histogram/compressed`. Read the
+[perception guide](src/polar_hist/README.md) for input calibration, equations,
+parameters, gap semantics, and tests. No autonomous controller is started;
+these packages publish perception output without driving motors.
+
 This is a fork from https://github.com/waveshareteam/ugv_ws.git, created for the course 'Vision for Autonomous Robots' at the University of Amsterdam.
 
 In the original code of Waveshare, there is explicit reference to the home-directory '/home/ws', while on the UGV itself the home-directory can be found at '/home/jetson'.

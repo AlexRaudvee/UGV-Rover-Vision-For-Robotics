@@ -1,9 +1,7 @@
 /**:
   ros__parameters:
-    rgb_topic: /oak/rgb/image_rect
+    rgb_topic: /oak/rgb/image_rect/compressed
+    rgb_transport: compressed
     camera_info_topic: /oak/rgb/camera_info
-    depth_topic: /oak/stereo/image_raw
-    use_depth: true
     rectified: true
-    frame_id: obstacle_histogram_oak
-    sensor_label: OAK RGB + aligned depth
+    scan_topic: /scan

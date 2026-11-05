@@ -22,6 +22,27 @@ export class Settings {
 		}else{
 			this.fromJSON(default_config);
 		}
+		// Add newly supplied perception views to an existing saved dashboard.
+		// Keep the user's other widgets and each existing view's positioning.
+		const defaults = JSON.parse(default_config);
+		if (defaults.layout_version && this.layout_version !== defaults.layout_version) {
+			this.navbar = this.navbar || [];
+			for (const id of defaults.managed_widgets || []) {
+				if (!this[id]) this[id] = { ...defaults[id] };
+				if (!this.navbar.some(widget => widget.id === id)) {
+					const widget = defaults.navbar.find(widget => widget.id === id);
+					if (widget) this.navbar.push({ ...widget });
+				}
+			}
+			for (const widget of this.navbar) {
+				const config = this[widget.id];
+				if (config && config.topic === '/obstacle_detection/histogram/compressed') {
+					config.topic = '/polar_hist/obstacle/histogram/compressed';
+				}
+			}
+			this.layout_version = defaults.layout_version;
+			this.save();
+		}
 	}
 
 	fromJSON(settings_object){

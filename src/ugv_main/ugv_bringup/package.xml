@@ -13,6 +13,14 @@
   <test_depend>python3-pytest</test_depend>
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ugv_vision</exec_depend>
+  <exec_depend>vizanti_server</exec_depend>
+  <exec_depend>obstacle_detection</exec_depend>
+  <exec_depend>object_detection</exec_depend>
+  <exec_depend>polar_hist</exec_depend>
   <export>
     <build_type>ament_python</build_type>
   </export>
