@@ -1,0 +1,9 @@
+# Overrides for replaying our own rover recordings (e.g. drive_1). These bags contain
+# the live topics the detectors use by default (rectified OAK RGB + compressedDepth),
+# so only the replay clock and the shared width band are set here.
+/**:
+  ros__parameters:
+    use_sim_time: true
+    # Same accepted width band for both detectors so they can be compared fairly.
+    width_min_m: 0.23
+    width_max_m: 0.33

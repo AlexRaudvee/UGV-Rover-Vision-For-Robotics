@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Replay a rosbag through both detectors + polar histograms and record their output.
-# Usage: bash run_bag_eval.sh [run_name] [bag_file]
+# Usage: bash run_bag_eval.sh [run_name] [bag] [params_yaml]
+#   bag:         an .mcap file or a rosbag2 folder (with metadata.yaml)
+#   params_yaml: detector overrides for that bag (default: bag_replay.yaml)
 # Runs on an isolated ROS domain so the bag's /cmd_vel never reaches a real rover.
 set -u
 
@@ -16,7 +18,8 @@ if [ "$ROS_DOMAIN_ID" = "4" ] || [ "$ROS_DOMAIN_ID" = "42" ]; then
     echo "Refusing to replay on domain $ROS_DOMAIN_ID (rover / default lab domain)."; exit 1
 fi
 if [ -e "$OUT" ]; then echo "$OUT already exists; pick another run name."; exit 1; fi
-[ -f "$BAG" ] || { echo "Bag not found: $BAG"; exit 1; }
+[ -e "$BAG" ] || { echo "Bag not found: $BAG"; exit 1; }
+if [ -d "$BAG" ]; then PLAY_ARGS=("$BAG"); else PLAY_ARGS=(-s mcap "$BAG"); fi
 
 set +u; source /opt/ros/humble/setup.bash; source "$WS/install/setup.bash"; set -u
 # Job control: each background job gets its own process group, so cleanup can stop
@@ -29,7 +32,8 @@ if pgrep -f "lib/(object_detection|obstacle_detection)/detector|lib/polar_hist/h
     exit 1
 fi
 mkdir -p "$LOGS"
-OVR="$REPO/bag_replay.yaml"
+OVR=${3:-$REPO/bag_replay.yaml}
+[ -f "$OVR" ] || { echo "Params file not found: $OVR"; exit 1; }
 pids=()
 
 cleanup() {
@@ -52,7 +56,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "ROS_DOMAIN_ID=$ROS_DOMAIN_ID  run=$RUN"
+echo "ROS_DOMAIN_ID=$ROS_DOMAIN_ID  run=$RUN  bag=$BAG  params=$OVR"
 ros2 run object_detection detector --ros-args -r __ns:=/object_detection -r __node:=detector \
     --params-file "$REPO/src/object_detection/config/detector.yaml" --params-file "$OVR" \
     < /dev/null > "$LOGS/depth.log" 2>&1 & pids+=($!)
@@ -74,5 +78,5 @@ if [ "${NO_VIEWER:-0}" != "1" ]; then
 fi
 
 sleep 4   # nodes must be up before /tf_static is replayed (~2.6 s into the bag)
-ros2 bag play -s mcap "$BAG" --clock
+ros2 bag play "${PLAY_ARGS[@]}" --clock
 sleep 2   # let the last messages reach the recorder
