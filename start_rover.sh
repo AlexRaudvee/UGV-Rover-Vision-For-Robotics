@@ -48,7 +48,7 @@ docker exec "${exec_options[@]}" \
         if [ "$2" != skip ]; then
             python3 scripts/clean_perception_metadata.py install
             colcon build --executor sequential --packages-select \
-                ugv_bringup ugv_vision object_detection obstacle_detection polar_hist \
+                ugv_bringup ugv_vision object_detection obstacle_detection polar_hist obstacle_avoidance \
                 vizanti_cpp vizanti_server
         fi
         source install/setup.bash

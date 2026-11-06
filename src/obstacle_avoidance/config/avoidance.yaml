@@ -1,0 +1,35 @@
+/**:
+  ros__parameters:
+    # Use the LiDAR detector. For depth, use /object_detection/detections and
+    # /polar_hist/object/gaps instead.
+    detections_topic: /obstacle_detection/detections
+    gaps_topic: /polar_hist/obstacle/gaps
+
+    # Speeds (m/s and rad/s)
+    cruise_speed: 0.15
+    pass_speed: 0.12
+    creep_speed: 0.08
+    max_turn_rate: 0.5
+
+    # The run ends here, whatever the robot is doing. Keep this inside the field.
+    target_distance: 2.0
+
+    # Robot size and how much room to leave (m)
+    robot_width: 0.35
+    side_margin: 0.08
+
+    # Start avoiding when an obstacle in the path is this close (m)
+    trigger_distance: 1.0
+    # Keep driving beside the obstacle for this far past its front (m).
+    # The assignment says obstacles are at most 50 cm.
+    pass_length: 0.65
+    # Do not move further than this from the path (m)
+    max_lateral: 1.0
+
+    # LiDAR safety stop: a box in front of the robot, measured from its center (m)
+    stop_distance: 0.35
+    body_front: 0.15
+    stop_half_width: 0.20
+
+    # auto, left or right. Use left and right to test passing on both sides.
+    preferred_side: auto
