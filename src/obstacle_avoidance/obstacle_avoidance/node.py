@@ -20,6 +20,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from .controller import (
     AvoidanceController, DONE, front_blocked, parse_detections, parse_gaps, Settings,
+    space_blocked,
 )
 
 
@@ -83,20 +84,20 @@ class AvoidanceNode(Node):
         """Keep the newest LiDAR scan."""
         self.scan, self.scan_time = message, time.monotonic()
 
-    def scan_is_blocked(self, now):
-        """Check the box in front of the robot. Returns None if the LiDAR is not usable."""
+    def read_scan(self, now):
+        """Check the boxes in front of the robot. Returns None if the LiDAR is not usable."""
         if self.scan is None or now - self.scan_time > self.settings.data_timeout:
-            return None
+            return None, None
         if self.scan_transform is None:
             try:
                 # The LiDAR is mounted rotated and does not move, so one lookup is enough.
                 found = self.tf_buffer.lookup_transform(
                     self.base_frame, self.scan.header.frame_id, Time())
             except TransformException:
-                return None
+                return None, None
             self.scan_transform = transform_arrays(found.transform)
-        points = scan_points_in_camera(self.scan, *self.scan_transform)
-        return front_blocked(points[:, :2].tolist(), self.settings)
+        points = scan_points_in_camera(self.scan, *self.scan_transform)[:, :2].tolist()
+        return front_blocked(points, self.settings), space_blocked(points, self.settings)
 
     def tick(self):
         """Run one control cycle."""
@@ -104,7 +105,8 @@ class AvoidanceNode(Node):
         pose = self.pose if now - self.pose_time <= self.settings.data_timeout else None
         if self.perception is not None:
             self.perception.gaps = self.gaps
-        command = self.controller.step(now, pose, self.perception, self.scan_is_blocked(now))
+        blocked, no_space = self.read_scan(now)
+        command = self.controller.step(now, pose, self.perception, blocked, no_space)
 
         twist = Twist()
         twist.linear.x, twist.angular.z = float(command.linear), float(command.angular)

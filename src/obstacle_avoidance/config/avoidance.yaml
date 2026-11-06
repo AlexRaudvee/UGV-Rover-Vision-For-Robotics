@@ -31,5 +31,13 @@
     body_front: 0.15
     stop_half_width: 0.20
 
+    # When blocked, turn on the spot until a box this long and as wide as the robot
+    # plus its margins is free (m), then drive this far into the space (m).
+    rotate_rate: 0.4
+    space_distance: 0.7
+    escape_length: 0.4
+    # Look this far to each side of the path direction (rad) before giving up.
+    rotate_limit: 1.57
+
     # auto, left or right. Use left and right to test passing on both sides.
     preferred_side: auto

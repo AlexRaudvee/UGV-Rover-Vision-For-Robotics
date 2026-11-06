@@ -7,7 +7,8 @@ y = 0 is the path itself. The states are:
   TURN    turn on the spot to a chosen heading
   PASS    drive to a lane beside the obstacle and follow it until past the obstacle
   RETURN  drive back to the path
-  HOLD    stopped, because no safe heading exists right now
+  ROTATE  turn on the spot until there is enough space ahead
+  ESCAPE  drive straight into that space, then go back to RETURN
   DONE    finished or gave up
 """
 
@@ -15,7 +16,8 @@ from dataclasses import dataclass, field
 import math
 
 
-CRUISE, TURN, PASS, RETURN, HOLD, DONE = 'CRUISE', 'TURN', 'PASS', 'RETURN', 'HOLD', 'DONE'
+CRUISE, TURN, PASS, RETURN = 'CRUISE', 'TURN', 'PASS', 'RETURN'
+ROTATE, ESCAPE, DONE = 'ROTATE', 'ESCAPE', 'DONE'
 
 
 @dataclass
@@ -42,10 +44,14 @@ class Settings:
     max_heading: float = 1.2
     stop_distance: float = 0.35
     body_front: float = 0.15
-    stop_half_width: float = 0.20
+    stop_half_width: float = 0.15
     min_stop_points: int = 2
+    rotate_rate: float = 0.4
+    rotate_limit: float = 1.57
+    rotate_extra: float = 0.15
+    space_distance: float = 0.7
+    escape_length: float = 0.4
     data_timeout: float = 0.8
-    blocked_timeout: float = 15.0
     max_run_time: float = 120.0
     preferred_side: str = 'auto'
 
@@ -224,9 +230,13 @@ class AvoidanceController:
         self.in_lane = False
         self.origin = None
         self.started = None
-        self.hold_since = None
-        self.blocked_since = None
         self.note = ''
+        self.space_blocked = False
+        self.rotate_sign = 1.0
+        self.rotate_flipped = False
+        self.rotate_note = ''
+        self.clear_yaw = None
+        self.escape_from = None
 
     def to_path_frame(self, raw_pose):
         """Convert an odometry pose to the frame set by the start pose."""
@@ -248,8 +258,12 @@ class AvoidanceController:
         self.state = DONE
         return self.stop(note)
 
-    def step(self, now, raw_pose, perception, scan_blocked):
-        """Run one cycle. Missing data (None) always stops the robot."""
+    def step(self, now, raw_pose, perception, scan_blocked, space_is_blocked=None):
+        """Run one cycle. Missing data (None) always stops the robot.
+
+        scan_blocked says something is right in front. space_is_blocked says the wider,
+        longer box that the robot needs to drive off is not free.
+        """
         if self.state == DONE:
             return self.stop(self.note)
         if raw_pose is None:
@@ -263,21 +277,13 @@ class AvoidanceController:
             return self.stop('waiting for fresh detections')
         if scan_blocked is None:
             return self.stop('waiting for LiDAR')
-        command = self.decide(now, pose, perception)
-        return self.apply_scan_stop(now, command, scan_blocked)
+        self.space_blocked = scan_blocked if space_is_blocked is None else space_is_blocked
+        command = self.decide(pose, perception)
+        if scan_blocked and command.linear > 0:
+            return self.start_rotating(pose, perception, 'LiDAR sees something right in front')
+        return command
 
-    def apply_scan_stop(self, now, command, scan_blocked):
-        """Stop forward motion if the LiDAR sees something right in front."""
-        if not (scan_blocked and command.linear > 0):
-            self.blocked_since = None
-            return command
-        if self.blocked_since is None:
-            self.blocked_since = now
-        if now - self.blocked_since > self.settings.blocked_timeout:
-            return self.finish('blocked for too long')
-        return self.stop('LiDAR stop: something is right in front')
-
-    def decide(self, now, pose, perception):
+    def decide(self, pose, perception):
         """Run the current state."""
         settings = self.settings
         x, y, _ = pose
@@ -286,10 +292,12 @@ class AvoidanceController:
         # This applies in every state, so the robot can never drive off the field.
         if x >= settings.target_distance:
             return self.finish('reached the target distance')
-        if self.state in (CRUISE, RETURN, HOLD) and near:
-            return self.start_avoiding(now, pose, perception, near)
-        if self.state == HOLD:
-            self.state = CRUISE
+        if self.state == ROTATE:
+            return self.rotate(pose, perception)
+        if self.state in (CRUISE, RETURN, ESCAPE) and near:
+            return self.start_avoiding(pose, perception, near)
+        if self.state == ESCAPE:
+            return self.escape(pose)
         if self.state == CRUISE:
             speed = (settings.creep_speed if unknown_ahead(perception, settings)
                      else settings.cruise_speed)
@@ -297,24 +305,80 @@ class AvoidanceController:
         if self.state == TURN:
             return self.turn(pose)
         if self.state == PASS:
-            return self.passing(now, pose, perception, near)
+            return self.passing(pose, perception, near)
         if abs(y) < settings.line_tolerance:
             self.state = CRUISE
         return self.drive(pose, math.atan2(-y, settings.rejoin_lookahead), settings.pass_speed)
 
-    def start_avoiding(self, now, pose, perception, blockers):
-        """Choose a heading once. Stop and keep trying if nothing is safe."""
+    def start_avoiding(self, pose, perception, blockers):
+        """Choose a heading once. Rotate to look for space if nothing is safe."""
         plan = choose_plan(pose, perception, blockers, self.settings)
         if plan is None:
-            self.state = HOLD
-            if self.hold_since is None:
-                self.hold_since = now
-            if now - self.hold_since > self.settings.blocked_timeout:
-                return self.finish('no safe way around the obstacle')
-            return self.stop('no safe heading')
-        self.plan, self.hold_since, self.in_lane = plan, None, False
+            return self.start_rotating(pose, perception, 'no safe heading')
+        self.plan, self.in_lane = plan, False
         self.state = TURN
         return self.turn(pose)
+
+    def rotation_direction(self, pose, perception):
+        """Pick the first direction to rotate: +1 is left, -1 is right."""
+        settings = self.settings
+        if self.state == PASS and self.plan is not None:
+            return 1.0 if self.plan.side == 'left' else -1.0
+        # Coming back to the path: face along the path again, to get past the obstacle.
+        if self.state == RETURN and abs(pose[2]) > settings.heading_tolerance:
+            return -math.copysign(1.0, pose[2])
+        if settings.preferred_side in ('left', 'right'):
+            return 1.0 if settings.preferred_side == 'left' else -1.0
+        ahead = [item for item in perception.obstacles if edges(item, settings)[0] > 0]
+        if ahead:
+            nearest = min(ahead, key=lambda item: edges(item, settings)[0])
+            return -1.0 if nearest.bearing > 0 else 1.0
+        return 1.0
+
+    def start_rotating(self, pose, perception, note):
+        """Start turning on the spot to look for space."""
+        self.rotate_sign = self.rotation_direction(pose, perception)
+        self.state, self.rotate_note = ROTATE, note
+        self.rotate_flipped, self.clear_yaw = False, None
+        return self.rotate(pose, perception)
+
+    def space_ahead(self, pose, perception):
+        """Check that the robot could drive straight ahead from here."""
+        settings = self.settings
+        _, y, yaw = pose
+        if abs(y) >= settings.max_lateral and y * math.sin(yaw) > 0:
+            return False
+        close = [item for item in perception.obstacles
+                 if item.distance <= settings.trigger_distance]
+        return not self.space_blocked and heading_clear(0.0, Perception(0.0, close), settings)
+
+    def rotate(self, pose, perception):
+        """Turn until the way ahead is free, or give up after looking both ways."""
+        settings = self.settings
+        yaw = pose[2]
+        if self.space_ahead(pose, perception):
+            if self.clear_yaw is None:
+                self.clear_yaw = yaw
+            # Turn a little further, so the robot is not right at the edge of the space.
+            if abs(wrap(yaw - self.clear_yaw)) >= settings.rotate_extra:
+                self.state, self.escape_from = ESCAPE, pose[:2]
+                return Command(0.0, 0.0, self.state, 'found space')
+        else:
+            self.clear_yaw = None
+        if self.rotate_sign * yaw >= settings.rotate_limit:
+            if self.rotate_flipped:
+                return self.finish('no space found on either side')
+            self.rotate_sign, self.rotate_flipped = -self.rotate_sign, True
+        return Command(0.0, self.rotate_sign * settings.rotate_rate, self.state, self.rotate_note)
+
+    def escape(self, pose):
+        """Drive straight into the space that was found, then head back to the path."""
+        settings = self.settings
+        moved = math.hypot(pose[0] - self.escape_from[0], pose[1] - self.escape_from[1])
+        leaving = abs(pose[1]) >= settings.max_lateral and pose[1] * math.sin(pose[2]) > 0
+        if moved >= settings.escape_length or leaving:
+            self.state = RETURN
+        return Command(settings.pass_speed, 0.0, self.state)
 
     def turn(self, pose):
         """Turn on the spot to the chosen heading."""
@@ -326,7 +390,7 @@ class AvoidanceController:
         return Command(0.0, clamp(self.settings.heading_gain * error, -limit, limit), self.state,
                        'passing on the ' + self.plan.side)
 
-    def passing(self, now, pose, perception, near):
+    def passing(self, pose, perception, near):
         """Hold the heading until the lane is reached, then follow the lane."""
         x, y, yaw = pose
         plan = self.plan
@@ -334,7 +398,7 @@ class AvoidanceController:
         new = [item for item in near
                if x + edges(item, self.settings)[0] * math.cos(yaw) > plan.clear_x]
         if new:
-            return self.start_avoiding(now, pose, perception, new)
+            return self.start_avoiding(pose, perception, new)
         if x >= plan.clear_x:
             self.state = RETURN
         if math.copysign(1.0, plan.heading) * (y - plan.lane_y) >= 0:
@@ -357,6 +421,14 @@ def front_blocked(points, settings):
     hits = sum(1 for x, y in points
                if settings.body_front < x < settings.stop_distance
                and abs(y) < settings.stop_half_width)
+    return hits >= settings.min_stop_points
+
+
+def space_blocked(points, settings):
+    """Count LiDAR points in the longer, wider box the robot needs to drive off."""
+    hits = sum(1 for x, y in points
+               if settings.body_front < x < settings.space_distance
+               and abs(y) < settings.clearance)
     return hits >= settings.min_stop_points
 
 

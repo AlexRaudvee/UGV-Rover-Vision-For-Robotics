@@ -6,8 +6,8 @@ import random
 
 from object_detection.perception import Detection
 from obstacle_avoidance.controller import (
-    AvoidanceController, choose_plan, CRUISE, DONE, front_blocked, HOLD, lane_clear, Obstacle,
-    parse_detections, parse_gaps, PASS, Perception, RETURN, Settings, TURN,
+    AvoidanceController, choose_plan, CRUISE, DONE, ESCAPE, front_blocked, lane_clear, Obstacle,
+    parse_detections, parse_gaps, PASS, Perception, RETURN, ROTATE, Settings, space_blocked, TURN,
 )
 from polar_hist.gaps import find_gaps
 import pytest
@@ -74,8 +74,8 @@ def distance_to_box(x, y, box):
     return math.hypot(dx, dy)
 
 
-def simulate(boxes, seconds=90.0, noise=None, **overrides):
-    """Drive a simulated robot and record what happened."""
+def simulate(boxes, seconds=90.0, noise=None, hidden=(), **overrides):
+    """Drive a simulated robot and record what happened. Only the LiDAR sees hidden boxes."""
     settings = Settings(**overrides)
     controller = AvoidanceController(settings)
     pose = [0.0, 0.0, 0.0]
@@ -87,14 +87,15 @@ def simulate(boxes, seconds=90.0, noise=None, **overrides):
             detections, gaps = see(pose, boxes, settings, noise)
             perception = parse_detections(detections, now)
             perception.gaps = parse_gaps(gaps)
-        blocked = front_blocked(scan_points(pose, boxes), settings)
-        command = controller.step(now, tuple(pose), perception, blocked)
+        points = scan_points(pose, list(boxes) + list(hidden))
+        command = controller.step(now, tuple(pose), perception, front_blocked(points, settings),
+                                  space_blocked(points, settings))
         pose[0] += command.linear * math.cos(pose[2]) * 0.1
         pose[1] += command.linear * math.sin(pose[2]) * 0.1
         pose[2] += command.angular * 0.1
-        if boxes:
+        if boxes or hidden:
             clearance = min(clearance, min(distance_to_box(pose[0], pose[1], box)
-                                           for box in boxes))
+                                           for box in list(boxes) + list(hidden)))
         y_max = max(y_max, abs(pose[1]))
         if not states or states[-1] != command.state:
             states.append(command.state)
@@ -178,7 +179,7 @@ def test_plan_rejects_a_lane_blocked_behind_the_first_obstacle():
 
 
 def test_target_distance_stops_the_robot_in_every_state():
-    for state in (RETURN, PASS, TURN, HOLD):
+    for state in (RETURN, PASS, TURN, ROTATE, ESCAPE):
         controller = AvoidanceController(Settings(target_distance=1.0))
         controller.step(0.0, (0.0, 0.0, 0.0), Perception(0.0), False)
         controller.state = state
@@ -193,12 +194,27 @@ def test_side_stays_fixed_with_noisy_measurements():
     assert len(result['sides']) == 1
 
 
-def test_gives_up_safely_when_a_wall_blocks_everything():
+def test_stays_safe_and_near_the_path_when_a_wall_blocks_everything():
     wall = [(1.3, y * 0.3) for y in range(-6, 7)]
-    result = simulate(wall, target_distance=3.0, blocked_timeout=5.0)
+    result = simulate(wall, seconds=130.0, target_distance=3.0)
     assert result['clearance'] > ROBOT_RADIUS
-    assert HOLD in result['states'] or result['states'][-1] == DONE
+    assert ROTATE in result['states']
+    assert result['y_max'] < 1.2
     assert result['note'] != 'reached the target distance'
+
+
+def test_rotates_around_an_obstacle_that_only_the_lidar_sees():
+    result = simulate([], hidden=[(1.3, 0.0)], target_distance=3.0)
+    assert_finished_on_path(result)
+    assert ROTATE in result['states'] and ESCAPE in result['states']
+
+
+@pytest.mark.parametrize('side,sign', [('left', 1), ('right', -1)])
+def test_rotates_towards_the_preferred_side_without_moving_forward(side, sign):
+    controller = AvoidanceController(Settings(preferred_side=side))
+    command = controller.step(0.0, (0.0, 0.0, 0.0), Perception(0.0), True, True)
+    assert command.state == ROTATE
+    assert command.linear == 0 and command.angular * sign > 0
 
 
 @pytest.mark.parametrize('pose,perception,scan,reason', [
@@ -213,14 +229,36 @@ def test_missing_or_old_data_stops_the_robot(pose, perception, scan, reason):
     assert reason in command.note
 
 
-def test_lidar_stop_overrides_driving_and_then_times_out():
-    controller = AvoidanceController(Settings(blocked_timeout=1.0))
-    pose = (0.0, 0.0, 0.0)
-    assert controller.step(0.0, pose, Perception(0.0), False).linear > 0
-    assert controller.step(0.1, pose, Perception(0.1), True).linear == 0
-    assert controller.step(0.2, pose, Perception(0.2), False).linear > 0
-    assert controller.step(0.3, pose, Perception(0.3), True).linear == 0
-    assert controller.step(1.5, pose, Perception(1.5), True).state == DONE
+def test_rotation_does_not_end_until_there_is_space():
+    controller = AvoidanceController()
+    yaw, command = 0.0, None
+    for tick in range(20):
+        command = controller.step(tick * 0.1, (0.0, 0.0, yaw), Perception(tick * 0.1), True, True)
+        assert command.state == ROTATE and command.linear == 0
+        yaw += command.angular * 0.1
+    for tick in range(20, 40):
+        command = controller.step(tick * 0.1, (0.0, 0.0, yaw), Perception(tick * 0.1), False, False)
+        yaw += command.angular * 0.1
+        if controller.state == ESCAPE:
+            break
+    assert controller.state == ESCAPE
+    assert controller.step(4.0, (0.0, 0.0, yaw), Perception(4.0), False, False).linear > 0
+
+
+def test_gives_up_after_looking_to_both_sides():
+    controller = AvoidanceController(Settings(preferred_side='left'))
+    yaw, signs = 0.0, set()
+    for tick in range(400):
+        command = controller.step(tick * 0.1, (0.0, 0.0, yaw), Perception(tick * 0.1), True, True)
+        assert command.linear == 0
+        if command.angular:
+            signs.add(math.copysign(1, command.angular))
+        yaw += command.angular * 0.1
+        if controller.state == DONE:
+            break
+    assert controller.note == 'no space found on either side'
+    assert signs == {1.0, -1.0}
+    assert abs(yaw) <= 1.57 + 0.05
 
 
 def test_message_that_is_not_fresh_is_rejected():
