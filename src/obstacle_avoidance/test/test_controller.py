@@ -6,8 +6,9 @@ import random
 
 from object_detection.perception import Detection
 from obstacle_avoidance.controller import (
-    AvoidanceController, choose_plan, CRUISE, DONE, ESCAPE, front_blocked, lane_clear, Obstacle,
-    parse_detections, parse_gaps, PASS, Perception, RETURN, ROTATE, Settings, space_blocked, TURN,
+    AvoidanceController, choose_plan, CRUISE, DONE, ESCAPE, front_blocked, HOLD, lane_clear,
+    least_blocked_side, Obstacle, parse_detections, parse_gaps, PASS, path_blocked, Perception, RETURN, ROTATE,
+    Settings, space_blocked, TURN,
 )
 from polar_hist.gaps import find_gaps
 import pytest
@@ -89,7 +90,7 @@ def simulate(boxes, seconds=90.0, noise=None, hidden=(), **overrides):
             perception.gaps = parse_gaps(gaps)
         points = scan_points(pose, list(boxes) + list(hidden))
         command = controller.step(now, tuple(pose), perception, front_blocked(points, settings),
-                                  space_blocked(points, settings))
+                                  space_blocked(points, settings), points)
         pose[0] += command.linear * math.cos(pose[2]) * 0.1
         pose[1] += command.linear * math.sin(pose[2]) * 0.1
         pose[2] += command.angular * 0.1
@@ -179,7 +180,7 @@ def test_plan_rejects_a_lane_blocked_behind_the_first_obstacle():
 
 
 def test_target_distance_stops_the_robot_in_every_state():
-    for state in (RETURN, PASS, TURN, ROTATE, ESCAPE):
+    for state in (RETURN, PASS, TURN, HOLD, ROTATE, ESCAPE):
         controller = AvoidanceController(Settings(target_distance=1.0))
         controller.step(0.0, (0.0, 0.0, 0.0), Perception(0.0), False)
         controller.state = state
@@ -217,12 +218,128 @@ def test_follows_the_path_direction_past_the_obstacle_after_escaping():
     assert result['y_max'] < 0.5
 
 
+def test_short_block_only_pauses_and_never_rotates():
+    controller = AvoidanceController(Settings(blocked_timeout=5.0))
+    pose = (0.0, 0.0, 0.0)
+    assert controller.step(0.0, pose, Perception(0.0), False).linear > 0
+    for tick in range(1, 30):
+        command = controller.step(tick * 0.1, pose, Perception(tick * 0.1), True, True)
+        assert command.linear == 0 and command.angular == 0
+        assert command.state == CRUISE and 'LiDAR stop' in command.note
+    assert controller.step(3.0, pose, Perception(3.0), False).linear > 0
+
+
 @pytest.mark.parametrize('side,sign', [('left', 1), ('right', -1)])
-def test_rotates_towards_the_preferred_side_without_moving_forward(side, sign):
-    controller = AvoidanceController(Settings(preferred_side=side))
-    command = controller.step(0.0, (0.0, 0.0, 0.0), Perception(0.0), True, True)
+def test_rotates_after_the_timeout_towards_the_preferred_side(side, sign):
+    controller = AvoidanceController(Settings(preferred_side=side, blocked_timeout=1.0))
+    pose = (0.0, 0.0, 0.0)
+    assert controller.step(0.0, pose, Perception(0.0), False).linear > 0
+    assert controller.step(0.1, pose, Perception(0.1), True, True).state == CRUISE
+    command = controller.step(1.5, pose, Perception(1.5), True, True)
     assert command.state == ROTATE
     assert command.linear == 0 and command.angular * sign > 0
+
+
+def rotate_until_space(world_points):
+    """Block a controller until it rotates, then free the way ahead and return it."""
+    controller = AvoidanceController(Settings(blocked_timeout=1.0))
+    controller.step(0.0, (0.0, 0.0, 0.0), Perception(0.0), False, False, [])
+    controller.step(0.1, (0.0, 0.0, 0.0), Perception(0.1), True, True, [])
+    command = controller.step(1.5, (0.0, 0.0, 0.0), Perception(1.5), True, True, [])
+    assert command.state == ROTATE
+    yaw = 0.0
+    for tick in range(16, 60):
+        yaw += command.angular * 0.1
+        points = [to_body((0.0, 0.0, yaw), point) for point in world_points]
+        command = controller.step(tick * 0.1, (0.0, 0.0, yaw), Perception(tick * 0.1),
+                                  False, False, points)
+        if controller.state != ROTATE:
+            break
+    return controller
+
+
+def test_escape_runs_only_if_the_path_is_still_blocked_after_rotating():
+    assert rotate_until_space([(0.3, 0.0), (0.3, 0.05), (0.3, -0.05)]).state == ESCAPE
+
+
+def test_no_escape_when_the_path_is_free_after_rotating():
+    assert rotate_until_space([]).state == CRUISE
+
+
+def test_path_check_uses_the_path_direction_not_the_robot_heading():
+    settings = Settings()
+    box = [(0.3, 0.0), (0.3, 0.05)]
+    assert path_blocked(box, 0.0, settings)
+    assert path_blocked([to_body((0.0, 0.0, 1.0), p) for p in box], 1.0, settings)
+    assert not path_blocked(box, 1.0, settings)
+    # Turned far enough that the box is almost beside the robot, but still along the path.
+    assert path_blocked([to_body((0.0, 0.0, 1.4), p) for p in box], 1.4, settings)
+
+
+def box_points(center_y, x=0.35):
+    """Sample the front of a 30 cm box as the LiDAR would see it."""
+    return [(x, center_y - BOX / 2 + step * BOX / 12) for step in range(13)]
+
+
+@pytest.mark.parametrize('center_y,expected', [(-0.05, 1), (-0.15, 1), (0.05, -1), (0.15, -1),
+                                               (0.0, 0)])
+def test_least_blocked_side(center_y, expected):
+    assert least_blocked_side(box_points(center_y), Settings()) == expected
+
+
+def test_a_second_obstacle_makes_that_side_more_blocked():
+    # The nearest box is centered, but another one is on the left, so right is freer.
+    points = box_points(0.0) + box_points(0.45)
+    assert least_blocked_side(points, Settings()) == -1
+
+
+def rotation_sign(center_y, **overrides):
+    """Return the direction of the first rotation with a box in front of the robot."""
+    controller = AvoidanceController(Settings(blocked_timeout=1.0, **overrides))
+    pose = (0.0, 0.0, 0.0)
+    points = box_points(center_y)
+    controller.step(0.0, pose, Perception(0.0), False, False, [])
+    controller.step(0.1, pose, Perception(0.1), True, True, points)
+    command = controller.step(1.5, pose, Perception(1.5), True, True, points)
+    assert command.state == ROTATE
+    return math.copysign(1, command.angular)
+
+
+@pytest.mark.parametrize('center_y,sign', [(-0.05, 1), (0.05, -1)])
+def test_rotates_away_from_the_obstruction(center_y, sign):
+    assert rotation_sign(center_y) == sign
+
+
+def test_least_obstruction_wins_over_the_preferred_side():
+    assert rotation_sign(-0.1, preferred_side='right') == 1
+    assert rotation_sign(0.1, preferred_side='left') == -1
+
+
+@pytest.mark.parametrize('side,sign', [('left', 1), ('right', -1)])
+def test_preferred_side_decides_when_both_sides_are_even(side, sign):
+    assert rotation_sign(0.0, preferred_side=side) == sign
+
+
+def test_camera_decides_when_the_lidar_has_no_points():
+    controller = AvoidanceController(Settings(blocked_timeout=1.0))
+    pose = (0.0, 0.0, 0.0)
+    # Off to the right and outside the path, so it does not start normal avoidance.
+    seen = [Obstacle(-0.5, -0.6, -0.4, 0.9)]
+    controller.step(0.0, pose, Perception(0.0), False, False, [])
+    controller.step(0.1, pose, Perception(0.1, seen), True, True, [])
+    command = controller.step(1.5, pose, Perception(1.5, seen), True, True, [])
+    assert command.state == ROTATE and command.angular > 0
+
+
+def test_no_safe_heading_waits_in_hold_before_rotating():
+    controller = AvoidanceController(Settings(blocked_timeout=2.0))
+    pose = (0.0, 0.0, 0.0)
+    wall = [Obstacle(0.0, -1.2, 1.2, 0.8)]
+    for now in (0.0, 1.0, 1.9):
+        command = controller.step(now, pose, Perception(now, wall), False, False, [])
+        assert command.state == HOLD and command.linear == 0 and command.angular == 0
+    command = controller.step(2.5, pose, Perception(2.5, wall), False, False, [])
+    assert command.state == ROTATE and command.angular != 0
 
 
 @pytest.mark.parametrize('pose,perception,scan,reason', [
@@ -238,8 +355,10 @@ def test_missing_or_old_data_stops_the_robot(pose, perception, scan, reason):
 
 
 def test_rotation_does_not_end_until_there_is_space():
-    controller = AvoidanceController()
+    controller = AvoidanceController(Settings(blocked_timeout=0.0))
     yaw, command = 0.0, None
+    controller.step(-0.2, (0.0, 0.0, yaw), Perception(-0.2), False)
+    controller.step(-0.1, (0.0, 0.0, yaw), Perception(-0.1), True, True)
     for tick in range(20):
         command = controller.step(tick * 0.1, (0.0, 0.0, yaw), Perception(tick * 0.1), True, True)
         assert command.state == ROTATE and command.linear == 0
@@ -254,8 +373,10 @@ def test_rotation_does_not_end_until_there_is_space():
 
 
 def test_gives_up_after_looking_to_both_sides():
-    controller = AvoidanceController(Settings(preferred_side='left'))
+    controller = AvoidanceController(Settings(preferred_side='left', blocked_timeout=0.0))
     yaw, signs = 0.0, set()
+    controller.step(-0.2, (0.0, 0.0, yaw), Perception(-0.2), False)
+    controller.step(-0.1, (0.0, 0.0, yaw), Perception(-0.1), True, True)
     for tick in range(400):
         command = controller.step(tick * 0.1, (0.0, 0.0, yaw), Perception(tick * 0.1), True, True)
         assert command.linear == 0

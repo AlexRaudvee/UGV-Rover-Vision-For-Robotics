@@ -14,8 +14,9 @@ The robot's start pose defines the path.
 | `TURN` | Turns on the spot to the chosen heading | The heading is reached |
 | `PASS` | Drives to a lane beside the obstacle and follows it | It is 65 cm past the front of the obstacle |
 | `RETURN` | Drives back to the path | It is within 5 cm of the path |
-| `ROTATE` | Turns on the spot, because the way ahead is blocked or no plan is safe | There is enough space ahead, or it has looked 90 degrees to both sides and gives up |
-| `ESCAPE` | Drives straight into the space it found | It has moved 40 cm, then goes to `PASS` to follow the path direction past the obstacle |
+| `HOLD` | Waits, because there is no safe way around | A way opens up, or it goes to `ROTATE` after 5 s |
+| `ROTATE` | Turns on the spot, because it has been blocked for 5 s | There is enough space ahead, or it has looked 90 degrees to both sides and gives up |
+| `ESCAPE` | Emergency only: the path is still blocked after rotating, so it drives straight into the space it found | It has moved 40 cm, then goes to `PASS` to follow the path direction past the obstacle |
 | `DONE` | Stopped | The run is over |
 
 The side is chosen once per obstacle and kept until the robot has passed it. This is the hysteresis the assignment asks for. The robot picks the safe lane closest to the path, using gaps from `polar_hist` and the free space beside each obstacle.
@@ -26,7 +27,7 @@ The robot stops if:
 - it reaches `target_distance`, in any state
 - it finds no space after looking to both sides, or the 120 s run limit passes
 
-If the LiDAR sees something right in front of it, even if the detectors missed it, it stops driving forward and goes to `ROTATE`. Rotating only checks the area ahead, so keep the sides of the robot clear.
+If the LiDAR sees something right in front of it, even if the detectors missed it, it pauses and carries on when the way clears. After 5 s it goes to `ROTATE`. If the path direction is then free, it carries on as normal. It only uses `ESCAPE` if the path is still blocked. It turns towards the side with fewer LiDAR points ahead, so an obstacle slightly to the right makes it turn left. If both sides are about even, it uses the camera, its current plan, and then `preferred_side`. Rotating only checks the area ahead, so keep the sides of the robot clear.
 
 A black object without a measured distance does not stop the robot, because dark floor markings would stop it for good. It slows down instead, avoids aiming at that object, and relies on the LiDAR stop.
 
@@ -57,7 +58,7 @@ Other settings are in `config/avoidance.yaml`.
 ## First test on the robot
 
 1. Put the robot on a box so the wheels are off the ground, then check that the wheels stop with Ctrl+C.
-2. Check the LiDAR stop: hold a box in front of the sensor. The status should go to `ROTATE`, and the wheels should turn the robot on the spot.
+2. Check the LiDAR stop: hold a box in front of the sensor. The status should say `LiDAR stop`. Remove the box within 5 s and it should carry on. Leave it for longer and it should go to `ROTATE`, turning on the spot. With the wheels off the ground, its heading barely changes, so test `ESCAPE` on the ground.
 3. With the robot on the ground and no obstacles, use `target_distance:=1.0`.
 4. Add one obstacle, then two.
 
