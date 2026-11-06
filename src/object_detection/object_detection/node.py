@@ -48,6 +48,15 @@ def transform_arrays(transform):
     return rotation, translation
 
 
+def pitch_correction(pitch_down_deg):
+    """Return the optical-frame rotation for a camera pitched down from its TF pose."""
+    # Optical axes: x right, y down, z forward. A camera tilted down by phi sees
+    # level-forward points above its image center, i.e. at negative optical y.
+    phi = math.radians(pitch_down_deg)
+    c, s = math.cos(phi), math.sin(phi)
+    return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
+
+
 class MeasuredDetector(Node):
     """Share segmentation and publishing while keeping range sources independent."""
 
@@ -65,6 +74,8 @@ class MeasuredDetector(Node):
             'depth_transport': 'compressedDepth',
             'scan_topic': '/scan', 'rectified': True, 'rate_hz': 5.0, 'max_width': 640,
             'reliable_input': True,
+            # Camera pitch (down positive) missing from TF; applied to LiDAR projection only.
+            'camera_pitch_down_deg': 0.0,
         }
         for name, value in static.items():
             self.declare_parameter(name, value, ParameterDescriptor(read_only=True))
@@ -77,8 +88,11 @@ class MeasuredDetector(Node):
             raise ValueError(result.reason)
         if not (0 < self.value('rate_hz') <= 30 and self.value('max_width') >= 160
                 and self.value('rgb_transport') in ('raw', 'compressed')
-                and self.value('depth_transport') in ('raw', 'compressedDepth')):
-            raise ValueError('Invalid processing rate, image width, or transport')
+                and self.value('depth_transport') in ('raw', 'compressedDepth')
+                and math.isfinite(self.value('camera_pitch_down_deg'))
+                and abs(self.value('camera_pitch_down_deg')) <= 30):
+            raise ValueError('Invalid processing rate, image width, transport, or camera pitch')
+        self.pitch_fix = pitch_correction(self.value('camera_pitch_down_deg'))
         self.add_on_set_parameters_callback(self.parameter_change)
         self.bridge = CvBridge()
         self.frames = deque(maxlen=12)
@@ -216,6 +230,7 @@ class MeasuredDetector(Node):
                     rgb.header.frame_id, sensor.header.frame_id,
                     Time.from_msg(sensor.header.stamp))
                 rotation, translation = transform_arrays(transform.transform)
+                rotation, translation = self.pitch_fix @ rotation, self.pitch_fix @ translation
                 points = scan_points_in_camera(sensor, rotation, translation)
                 estimates = lidar_estimates_for_blobs(blobs, points, camera, settings)
             if self.range_frame != rgb.header.frame_id:
