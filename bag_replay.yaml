@@ -1,0 +1,14 @@
+# Overrides for replaying avoidance_cleaned_v2.mcap (raw OAK RGB + raw registered depth).
+/**:
+  ros__parameters:
+    rgb_topic: /oak/rgb/image_raw/compressed
+    rectified: false
+    depth_topic: /oak/stereo/image_raw
+    depth_transport: raw
+    use_sim_time: true
+    # OAK camera is pitched ~5 deg down relative to the LiDAR, but TF says level.
+    # Found by sweeping pitch on this bag: 37/144 -> 111/144 boxes get LiDAR returns.
+    camera_pitch_down_deg: 5.0
+    # Same accepted width band for both detectors so they can be compared fairly.
+    width_min_m: 0.23
+    width_max_m: 0.33

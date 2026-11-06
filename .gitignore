@@ -1,4 +1,6 @@
 build/
 docs/
 install/
-log/
+log/*.tar
+*.mcap
+VAR_*.pdf
