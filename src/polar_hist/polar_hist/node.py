@@ -1,6 +1,6 @@
 """Consume both independent detectors and publish histograms plus physical gaps."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 import time
@@ -21,6 +21,20 @@ from object_detection.node import transform_arrays
 from .gaps import find_gaps
 from .histogram import PolarHistogram
 from .visualization import histogram_image
+
+# Raw (distorted) images: the FOV is measured on the principal row, so silhouettes
+# touching the image edge in other rows can overshoot it by ~1e-3 rad. Angles within
+# this tolerance are clipped to the FOV; anything further out is still rejected.
+FOV_EDGE_TOLERANCE_RAD = 0.01
+
+
+def clip_to_fov(low, high, fov):
+    """Clip an angular interval that overshoots the FOV by at most the tolerance."""
+    if not (np.isfinite([low, high]).all() and low <= high
+            and fov[0] - FOV_EDGE_TOLERANCE_RAD <= low
+            and high <= fov[1] + FOV_EDGE_TOLERANCE_RAD):
+        return None
+    return max(low, fov[0]), min(high, fov[1])
 
 
 @dataclass
@@ -98,23 +112,29 @@ class PolarHistogramNode(Node):
             if (not payload['frame_id'] or len(fov) != 2 or not np.isfinite(fov).all()
                     or not -math.pi/2 < fov[0] < fov[1] < math.pi/2):
                 raise ValueError('Invalid camera frame or field of view')
-            blockers = [Detection(**item) for item in payload['blockers']]
-            for item in blockers:
+            blockers = []
+            for item in (Detection(**entry) for entry in payload['blockers']):
+                clipped = clip_to_fov(item.angle_min, item.angle_max, fov)
+                if clipped is None or not item.angle_min <= item.bearing <= item.angle_max:
+                    raise ValueError('Invalid measured obstacle geometry')
+                low, high = clipped
+                item = replace(item, angle_min=low, angle_max=high,
+                               bearing=min(max(item.bearing, low), high))
+                blockers.append(item)
                 if not (np.isfinite([item.angle_min, item.angle_max, item.bearing,
                                      item.distance_m, item.width_m, item.confidence,
                                      item.width_std_m, item.range_std_m]).all()
-                        and fov[0] - 1e-6 <= item.angle_min < item.angle_max <= fov[1] + 1e-6
-                        and item.angle_min <= item.bearing <= item.angle_max
+                        and item.angle_min < item.angle_max
                         and item.distance_m > 0 and item.width_m > 0
                         and item.width_std_m >= 0 and item.range_std_m >= 0
                         and 0 <= item.confidence <= 1):
                     raise ValueError('Invalid measured obstacle geometry')
-            unknown = payload['unknown_intervals']
-            for interval in unknown:
-                low, high = interval['angle_min'], interval['angle_max']
-                if (not np.isfinite([low, high]).all()
-                        or not fov[0] - 1e-6 <= low <= high <= fov[1] + 1e-6):
+            unknown = []
+            for interval in payload['unknown_intervals']:
+                clipped = clip_to_fov(interval['angle_min'], interval['angle_max'], fov)
+                if clipped is None:
                     raise ValueError('Invalid unknown silhouette interval')
+                unknown.append(dict(interval, angle_min=clipped[0], angle_max=clipped[1]))
             low_range, high_range = payload['range_min'], payload['range_max']
             if not np.isfinite([low_range, high_range]).all() or not 0 < low_range < high_range:
                 raise ValueError('Invalid sensor range')
