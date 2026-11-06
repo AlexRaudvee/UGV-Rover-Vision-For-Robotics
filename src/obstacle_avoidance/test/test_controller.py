@@ -209,6 +209,14 @@ def test_rotates_around_an_obstacle_that_only_the_lidar_sees():
     assert ROTATE in result['states'] and ESCAPE in result['states']
 
 
+def test_follows_the_path_direction_past_the_obstacle_after_escaping():
+    result = simulate([], hidden=[(1.3, 0.0)], target_distance=3.0, stop_half_width=0.20)
+    assert_finished_on_path(result)
+    states = result['states']
+    assert states[states.index(ESCAPE) + 1] == PASS
+    assert result['y_max'] < 0.5
+
+
 @pytest.mark.parametrize('side,sign', [('left', 1), ('right', -1)])
 def test_rotates_towards_the_preferred_side_without_moving_forward(side, sign):
     controller = AvoidanceController(Settings(preferred_side=side))

@@ -15,7 +15,7 @@ The robot's start pose defines the path.
 | `PASS` | Drives to a lane beside the obstacle and follows it | It is 65 cm past the front of the obstacle |
 | `RETURN` | Drives back to the path | It is within 5 cm of the path |
 | `ROTATE` | Turns on the spot, because the way ahead is blocked or no plan is safe | There is enough space ahead, or it has looked 90 degrees to both sides and gives up |
-| `ESCAPE` | Drives straight into the space it found | It has moved 40 cm, then goes to `RETURN` |
+| `ESCAPE` | Drives straight into the space it found | It has moved 40 cm, then goes to `PASS` to follow the path direction past the obstacle |
 | `DONE` | Stopped | The run is over |
 
 The side is chosen once per obstacle and kept until the robot has passed it. This is the hysteresis the assignment asks for. The robot picks the safe lane closest to the path, using gaps from `polar_hist` and the free space beside each obstacle.

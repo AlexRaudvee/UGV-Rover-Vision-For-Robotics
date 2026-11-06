@@ -8,7 +8,7 @@ y = 0 is the path itself. The states are:
   PASS    drive to a lane beside the obstacle and follow it until past the obstacle
   RETURN  drive back to the path
   ROTATE  turn on the spot until there is enough space ahead
-  ESCAPE  drive straight into that space, then go back to RETURN
+  ESCAPE  drive straight into that space, then follow the path direction in PASS
   DONE    finished or gave up
 """
 
@@ -48,8 +48,9 @@ class Settings:
     min_stop_points: int = 2
     rotate_rate: float = 0.4
     rotate_limit: float = 1.57
-    rotate_extra: float = 0.15
-    space_distance: float = 0.7
+    rotate_extra: float = 0.05
+    space_distance: float = 0.55
+    space_margin: float = 0.02
     escape_length: float = 0.4
     data_timeout: float = 0.8
     max_run_time: float = 120.0
@@ -237,6 +238,7 @@ class AvoidanceController:
         self.rotate_note = ''
         self.clear_yaw = None
         self.escape_from = None
+        self.obstacle_forward = 0.0
 
     def to_path_frame(self, raw_pose):
         """Convert an odometry pose to the frame set by the start pose."""
@@ -340,6 +342,11 @@ class AvoidanceController:
         self.rotate_sign = self.rotation_direction(pose, perception)
         self.state, self.rotate_note = ROTATE, note
         self.rotate_flipped, self.clear_yaw = False, None
+        # How far ahead the obstacle starts, to know when the robot has passed it.
+        ahead = [edges(item, self.settings)[0] for item in perception.obstacles
+                 if in_path(item, self.settings)
+                 and edges(item, self.settings)[0] <= self.settings.trigger_distance]
+        self.obstacle_forward = min(ahead, default=self.settings.stop_distance)
         return self.rotate(pose, perception)
 
     def space_ahead(self, pose, perception):
@@ -372,12 +379,14 @@ class AvoidanceController:
         return Command(0.0, self.rotate_sign * settings.rotate_rate, self.state, self.rotate_note)
 
     def escape(self, pose):
-        """Drive straight into the space that was found, then head back to the path."""
+        """Drive straight into the space, then follow the path direction past the obstacle."""
         settings = self.settings
         moved = math.hypot(pose[0] - self.escape_from[0], pose[1] - self.escape_from[1])
         leaving = abs(pose[1]) >= settings.max_lateral and pose[1] * math.sin(pose[2]) > 0
         if moved >= settings.escape_length or leaving:
-            self.state = RETURN
+            clear_x = (self.escape_from[0] + self.obstacle_forward + settings.pass_length)
+            self.plan = Plan(pose[2], pose[1], clear_x, 'left' if pose[2] > 0 else 'right')
+            self.in_lane, self.state = True, PASS
         return Command(settings.pass_speed, 0.0, self.state)
 
     def turn(self, pose):
@@ -425,10 +434,10 @@ def front_blocked(points, settings):
 
 
 def space_blocked(points, settings):
-    """Count LiDAR points in the longer, wider box the robot needs to drive off."""
+    """Count LiDAR points in the box the robot needs to drive off without stopping again."""
+    half_width = max(settings.stop_half_width, settings.robot_width / 2) + settings.space_margin
     hits = sum(1 for x, y in points
-               if settings.body_front < x < settings.space_distance
-               and abs(y) < settings.clearance)
+               if settings.body_front < x < settings.space_distance and abs(y) < half_width)
     return hits >= settings.min_stop_points
 
 

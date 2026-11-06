@@ -31,10 +31,12 @@
     body_front: 0.15
     stop_half_width: 0.20
 
-    # When blocked, turn on the spot until a box this long and as wide as the robot
-    # plus its margins is free (m), then drive this far into the space (m).
+    # When blocked, turn on the spot until a box this long is free (m). It is slightly
+    # wider than the robot and the LiDAR stop box. Then drive this far into the space (m),
+    # and follow the path direction until past the obstacle.
     rotate_rate: 0.4
-    space_distance: 0.7
+    rotate_extra: 0.05
+    space_distance: 0.55
     escape_length: 0.4
     # Look this far to each side of the path direction (rad) before giving up.
     rotate_limit: 1.57
