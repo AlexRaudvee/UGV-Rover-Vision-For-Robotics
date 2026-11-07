@@ -88,6 +88,12 @@ class DetectorSettings:
     range_track_timeout_s: float = 0.6
     range_jump_m: float = 0.20
     depth_ema_tau_s: float = 0.35
+    # Merge detections that are pieces of one object (e.g. a rover's deck and track):
+    # overlapping horizontally, close vertically, at about the same distance.
+    # merge_max_gap_px = 0 disables merging.
+    merge_max_gap_px: float = 0.0
+    merge_min_overlap: float = 0.5
+    merge_max_range_diff_m: float = 0.3
 
 
 def validate(settings):
@@ -106,7 +112,9 @@ def validate(settings):
             and settings.max_surface_std_m > 0 and 0 <= settings.width_tolerance_m <= 0.03
             and 1 <= settings.range_window <= 9
             and settings.range_track_timeout_s > 0 and settings.range_jump_m > 0
-            and 0 <= settings.depth_ema_tau_s <= 2.0):
+            and 0 <= settings.depth_ema_tau_s <= 2.0
+            and settings.merge_max_gap_px >= 0 and 0 < settings.merge_min_overlap <= 1
+            and settings.merge_max_range_diff_m >= 0):
         raise ValueError('Invalid color, blob, width, range, or sample limits')
 
 
@@ -152,6 +160,9 @@ class Detection:
     # Cut off by the left/right image border: width_m is only a lower bound, so the
     # width can never be confirmed to be in the target band (accepted stays False).
     clipped: bool = False
+    # For a merged detection: the image boxes of the blobs it was merged from
+    # (bbox is then their union). None for a single blob.
+    parts: tuple = None
 
     def to_dict(self):
         """Serialize only finite metric measurements."""
@@ -229,6 +240,67 @@ def measure_blob(blob, axial_m, source, settings, estimate=None):
                      width_std, estimate.std_m / math.cos(blob.bearing) if estimate else 0.0,
                      estimate.samples if estimate else 0, nominal and not blob.clipped,
                      blob.clipped)
+
+
+def mergeable(first, second, settings):
+    """Return whether two detections look like pieces of one object."""
+    ax, ay, aw, ah = first.bbox
+    bx, by, bw, bh = second.bbox
+    overlap = min(ax + aw, bx + bw) - max(ax, bx)
+    if overlap < settings.merge_min_overlap * min(aw, bw):
+        return False
+    gap = max(ay, by) - min(ay + ah, by + bh)   # negative when they overlap vertically
+    if gap > max(settings.merge_max_gap_px, 0.1 * max(ah, bh)):
+        return False
+    return abs(first.distance_m - second.distance_m) <= settings.merge_max_range_diff_m
+
+
+def merge_pair(first, second, settings):
+    """Combine two detection pieces into one; distance from the nearer piece."""
+    near = first if first.distance_m <= second.distance_m else second
+    angle_min = min(first.angle_min, second.angle_min)
+    angle_max = max(first.angle_max, second.angle_max)
+    bearing = (angle_min + angle_max) / 2
+    # Angles are -atan(X/Z), so the optical X/Z span is the tangent difference.
+    width = near.axial_m * abs(math.tan(angle_max) - math.tan(angle_min))
+    width_std = max(first.width_std_m, second.width_std_m)
+    clipped = first.clipped or second.clipped
+    tolerance = min(settings.width_tolerance_m, 2 * width_std)
+    accepted = not clipped and settings.width_min_m - tolerance - 1e-7 <= width <= (
+        settings.width_max_m + tolerance + 1e-7)
+    nominal = (not clipped
+               and settings.width_min_m - 1e-7 <= width <= settings.width_max_m + 1e-7)
+    x = min(first.bbox[0], second.bbox[0])
+    y = min(first.bbox[1], second.bbox[1])
+    right = max(first.bbox[0] + first.bbox[2], second.bbox[0] + second.bbox[2])
+    bottom = max(first.bbox[1] + first.bbox[3], second.bbox[1] + second.bbox[3])
+    parts = (first.parts or (first.bbox,)) + (second.parts or (second.bbox,))
+    return Detection((x, y, right - x, bottom - y), bearing, angle_min, angle_max,
+                     near.distance_m, near.distance_source,
+                     min(first.confidence, second.confidence),
+                     first.area_px + second.area_px, width, near.axial_m, accepted, width_std,
+                     max(first.range_std_m, second.range_std_m),
+                     first.sample_count + second.sample_count, nominal, clipped, parts)
+
+
+def merge_detections(items, settings):
+    """Repeatedly merge detection pieces of one object (see mergeable)."""
+    if settings.merge_max_gap_px <= 0:
+        return list(items)
+    items = list(items)
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                if mergeable(items[i], items[j], settings):
+                    items[i] = merge_pair(items[i], items[j], settings)
+                    del items[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return items
 
 
 def depth_for_blob(blob, depth_m, settings):

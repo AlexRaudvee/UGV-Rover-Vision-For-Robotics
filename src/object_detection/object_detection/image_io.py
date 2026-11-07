@@ -66,11 +66,17 @@ def waiting_image(status):
 def annotated_image(bgr, blobs, measured, status):
     """Distinguish detections (measured distance) from unmeasured blobs."""
     image = bgr.copy()
-    by_box = {item.bbox: item for item in measured}
+    # A merged detection covers several blobs: map each part to it, draw it once.
+    by_box = {part: item for item in measured for part in (item.parts or (item.bbox,))}
+    drawn = set()
     for blob in blobs:
         item = by_box.get(blob.bbox)
+        if item is not None and id(item) in drawn:
+            continue
+        if item is not None:
+            drawn.add(id(item))
         color = (40, 220, 40) if item else (0, 160, 255)
-        x, y, width, height = blob.bbox
+        x, y, width, height = item.bbox if item else blob.bbox
         cv2.rectangle(image, (x, y), (x + width, y + height), color, 2)
         if item is None:
             message = 'unmeasured'

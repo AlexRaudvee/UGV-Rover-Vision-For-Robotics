@@ -31,5 +31,10 @@
     range_window: 3
     range_track_timeout_s: 0.6
     range_jump_m: 0.20
+    # Merge pieces of one object (overlapping horizontally, <= gap px apart vertically,
+    # within merge_max_range_diff_m of each other). 0 disables merging.
+    merge_max_gap_px: 15.0
+    merge_min_overlap: 0.5
+    merge_max_range_diff_m: 0.3
     # Time-based EMA: about 44% new data per 0.2 s frame; zero disables it.
     depth_ema_tau_s: 0.6

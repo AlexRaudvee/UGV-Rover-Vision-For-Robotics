@@ -22,7 +22,7 @@ from .image_io import annotated_image, decode_depth, depth_preview, publish_jpeg
 from .perception import (
     CameraModel, depth_estimate_for_blob, DetectorSettings, find_black_blobs,
     lidar_estimates_for_blobs,
-    measure_blob, scan_points_in_camera, validate,
+    measure_blob, merge_detections, scan_points_in_camera, validate,
 )
 from .ranging import TemporalRanges
 from .synchronization import select_pair, stamp_ns
@@ -244,6 +244,7 @@ class MeasuredDetector(Node):
                     unknown.append(blob.interval())
                 else:
                     measured.append(item)
+            measured = merge_detections(measured, settings)   # pieces of one object
             acquisition_age = max(0, self.get_clock().now().nanoseconds
                                   - min(stamp_ns(rgb), stamp_ns(sensor))) / 1e9
             self.last_good_received = min(received, time.monotonic() - acquisition_age)
