@@ -142,11 +142,16 @@ class Detection:
     area_px: float
     width_m: float = 0.0
     axial_m: float = 0.0
+    # Informational: measured width is in the target band (23-33 cm) and fully visible.
+    # Every Detection is an obstacle regardless of this flag.
     accepted: bool = True
     width_std_m: float = 0.0
     range_std_m: float = 0.0
     sample_count: int = 0
     nominal_width: bool = True
+    # Cut off by the left/right image border: width_m is only a lower bound, so the
+    # width can never be confirmed to be in the target band (accepted stays False).
+    clipped: bool = False
 
     def to_dict(self):
         """Serialize only finite metric measurements."""
@@ -179,7 +184,9 @@ def find_black_blobs(bgr, camera, settings):
         # A tiny color speck cannot be a target-width object even at maximum range.
         if ray_span * settings.range_max < settings.width_min_m - settings.width_tolerance_m:
             continue
-        clipped = x <= 0 or y <= 0 or x + width >= camera.width or y + height >= camera.height
+        # Only the left/right border can cut off the (horizontal) width; touching the
+        # top or bottom border leaves the measured width complete.
+        clipped = x <= 0 or x + width >= camera.width
         blobs.append(Blob((x, y, width, height), contour, float(angles[2]),
                           float(min(angles[:2])), float(max(angles[:2])),
                           ray_span, float(area), clipped))
@@ -201,7 +208,9 @@ class RangeEstimate:
 
 def measure_blob(blob, axial_m, source, settings, estimate=None):
     """Compute width = optical Z * (right X/Z - left X/Z)."""
-    if blob.clipped or not math.isfinite(axial_m) or axial_m <= 0:
+    # A clipped blob keeps its measured distance (it is a detection), but its width is
+    # only a lower bound, so it is never marked as target-sized (accepted).
+    if not math.isfinite(axial_m) or axial_m <= 0:
         return None
     distance = axial_m / math.cos(blob.bearing)
     if not settings.range_min <= distance <= settings.range_max:
@@ -211,14 +220,15 @@ def measure_blob(blob, axial_m, source, settings, estimate=None):
     width_std = (math.hypot(blob.ray_span * estimate.std_m, 0.005)
                  if estimate is not None else 0.0)
     tolerance = min(settings.width_tolerance_m, 2 * width_std)
-    accepted = settings.width_min_m - tolerance - 1e-7 <= width <= (
+    accepted = not blob.clipped and settings.width_min_m - tolerance - 1e-7 <= width <= (
         settings.width_max_m + tolerance + 1e-7)
     confidence = (max(0.2, 1 - estimate.std_m / settings.max_surface_std_m)
                   if estimate is not None else 1.0)
     return Detection(blob.bbox, blob.bearing, blob.angle_min, blob.angle_max,
                      distance, source, confidence, blob.area_px, width, axial_m, accepted,
                      width_std, estimate.std_m / math.cos(blob.bearing) if estimate else 0.0,
-                     estimate.samples if estimate else 0, nominal)
+                     estimate.samples if estimate else 0, nominal and not blob.clipped,
+                     blob.clipped)
 
 
 def depth_for_blob(blob, depth_m, settings):

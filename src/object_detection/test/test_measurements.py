@@ -62,11 +62,24 @@ def test_depth_samples_only_the_contour_and_never_assumes_a_known_width():
     assert measure_blob(blob, math.nan, 'depth', settings) is None
 
 
-def test_clipped_blob_cannot_pass_width_filter():
+def test_side_clipped_blob_keeps_distance_but_is_never_accepted():
     settings = DetectorSettings()
     blob = find_black_blobs(scene(center=20), camera(), settings)[0][0]
     assert blob.clipped
-    assert measure_blob(blob, 1.5, 'depth', settings) is None
+    item = measure_blob(blob, 1.5, 'depth', settings)
+    assert item.clipped and not item.accepted and not item.nominal_width
+    assert item.distance_m == pytest.approx(1.5 / math.cos(item.bearing))
+
+
+def test_top_and_bottom_borders_do_not_clip_the_width():
+    settings = DetectorSettings()
+    image = np.full((480, 640, 3), 200, np.uint8)
+    image[0:480, 275:365] = 20                    # 90 px wide box spanning full height
+    blob = find_black_blobs(image, camera(), settings)[0][0]
+    assert not blob.clipped
+    item = measure_blob(blob, 1.5, 'depth', settings)
+    assert item.accepted and not item.clipped
+    assert item.width_m == pytest.approx(0.27, abs=1e-6)
 
 
 def test_color_speckles_too_narrow_at_maximum_range_are_ignored():

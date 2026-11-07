@@ -247,15 +247,17 @@ class MeasuredDetector(Node):
             acquisition_age = max(0, self.get_clock().now().nanoseconds
                                   - min(stamp_ns(rgb), stamp_ns(sensor))) / 1e9
             self.last_good_received = min(received, time.monotonic() - acquisition_age)
-            accepted_count = sum(item.accepted for item in measured)
-            status = (f'{self.mode}: {len(blobs)} blobs; {accepted_count} accepted; '
-                      f'{len(measured) - accepted_count} wrong size; '
-                      f'{len(unknown)} uncertain/clipped')
+            target_count = sum(item.accepted for item in measured)
+            clipped_count = sum(item.clipped for item in measured)
+            status = (f'{self.mode}: {len(blobs)} blobs; {len(measured)} detections '
+                      f'({target_count} target size, {clipped_count} clipped); '
+                      f'{len(unknown)} unmeasured')
             payload = self.payload(rgb.header, True, status)
             payload.update({
                 'field_of_view': list(camera.field_of_view()),
-                'detections': [item.to_dict() for item in measured if item.accepted],
-                'blockers': [item.to_dict() for item in measured],
+                # Every object with a measured distance is a detection (an obstacle);
+                # 'accepted' only records whether its width is in the target band.
+                'detections': [item.to_dict() for item in measured],
                 'unknown_intervals': unknown,
                 'blob_count': len(blobs), 'measured_count': len(measured),
                 'width_band_m': [settings.width_min_m, settings.width_max_m],
@@ -286,7 +288,7 @@ class MeasuredDetector(Node):
             'frame_id': header.frame_id,
             'stamp': {'sec': header.stamp.sec, 'nanosec': header.stamp.nanosec},
             'range_min': settings.range_min, 'range_max': settings.range_max,
-            'field_of_view': None, 'detections': [], 'blockers': [], 'unknown_intervals': [],
+            'field_of_view': None, 'detections': [], 'unknown_intervals': [],
         }
 
     def unavailable(self, status):

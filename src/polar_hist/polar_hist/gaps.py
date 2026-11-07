@@ -29,7 +29,8 @@ def find_gaps(blockers, unknown_intervals=(), required_width=0.35, margin=0.0):
     A diagonal distance between staggered objects can overstate available lateral
     clearance. Project both facing-edge rays to the nearer plane instead. Inset
     both sides by half the required vehicle width plus optional side margin.
-    Unknown silhouettes and objects rejected by the width filter remain blockers.
+    Any measured obstacle can bound a gap, whatever its width; an unknown
+    (unmeasured) silhouette inside an opening closes it.
     """
     if not (math.isfinite(required_width) and required_width > 0
             and math.isfinite(margin) and margin >= 0):
@@ -46,7 +47,7 @@ def find_gaps(blockers, unknown_intervals=(), required_width=0.35, margin=0.0):
                 right = left
             continue
         low, high = right.angle_max, left.angle_min
-        bounded = right.accepted and left.accepted and -math.pi/2 < low < high < math.pi/2
+        bounded = -math.pi/2 < low < high < math.pi/2
         unknown = any(item['angle_max'] >= low and item['angle_min'] <= high
                       for item in unknown_intervals)
         if bounded and not unknown:

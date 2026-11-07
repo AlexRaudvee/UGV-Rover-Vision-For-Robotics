@@ -64,17 +64,22 @@ def waiting_image(status):
 
 
 def annotated_image(bgr, blobs, measured, status):
-    """Distinguish accepted objects, wrong-size objects, and unmeasured blobs."""
+    """Distinguish detections (measured distance) from unmeasured blobs."""
     image = bgr.copy()
     by_box = {item.bbox: item for item in measured}
     for blob in blobs:
         item = by_box.get(blob.bbox)
-        color = (40, 220, 40) if item and item.accepted else (0, 160, 255)
+        color = (40, 220, 40) if item else (0, 160, 255)
         x, y, width, height = blob.bbox
         cv2.rectangle(image, (x, y), (x + width, y + height), color, 2)
-        message = ('unmeasured / clipped' if item is None else
-                   f'{item.width_m * 100:.1f}+/-{item.width_std_m * 100:.1f}cm '
-                   f'{item.distance_m:.2f}m {item.distance_source}')
+        if item is None:
+            message = 'unmeasured'
+        elif item.clipped:
+            message = (f'clipped >={item.width_m * 100:.0f}cm '
+                       f'{item.distance_m:.2f}m {item.distance_source}')
+        else:
+            message = (f'{item.width_m * 100:.1f}+/-{item.width_std_m * 100:.1f}cm '
+                       f'{item.distance_m:.2f}m {item.distance_source}')
         label(image, message, (x, max(45, y - 5)), color, 0.42)
     cv2.rectangle(image, (0, 0), (image.shape[1], 28), (30, 27, 24), -1)
     label(image, status[:95], (6, 19), scale=0.40)

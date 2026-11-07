@@ -39,11 +39,20 @@ def test_staggered_depth_cannot_create_false_clearance_from_diagonal_distance():
     assert not find_gaps([obstacle(-.27, 0, z=1.), obstacle(.2, .47, z=3.)])
 
 
-def test_unmeasured_or_wrong_size_object_inside_opening_blocks_green_gap():
+def test_unmeasured_object_inside_opening_blocks_green_gap():
     bounds = [obstacle(-.7, -.43), obstacle(.43, .7)]
     assert find_gaps(bounds)
     assert not find_gaps(bounds, [{'angle_min': -.02, 'angle_max': .02}])
-    assert not find_gaps(bounds + [obstacle(-.08, .08, accepted=False)])
+
+
+def test_any_measured_obstacle_bounds_and_splits_gaps_whatever_its_width():
+    # Non-target-size (accepted=False) obstacles still bound gaps.
+    assert len(find_gaps([obstacle(-.27, 0, accepted=False),
+                          obstacle(.36, .63, accepted=False)])) == 1
+    # A measured obstacle in the middle splits an 86 cm opening into two 35 cm gaps.
+    gaps = find_gaps([obstacle(-.7, -.43), obstacle(-.08, .08, accepted=False),
+                      obstacle(.43, .7)])
+    assert [g.width_m for g in gaps] == pytest.approx([.35, .35])
 
 
 def test_no_green_gap_to_unseen_fov_boundary_or_overlapping_objects():
