@@ -68,7 +68,8 @@ class TemporalRanges:
                 continue
             if track.history:
                 previous = float(np.median([item.axial_m for _, item in track.history]))
-                gate = max(settings.range_jump_m, 3 * estimate.std_m)
+                gate = max(settings.range_jump_m, settings.range_jump_fraction * previous,
+                           3 * estimate.std_m)
                 if abs(estimate.axial_m - previous) > gate:
                     if (track.pending is None
                             or abs(estimate.axial_m - track.pending.axial_m) > gate / 2):
