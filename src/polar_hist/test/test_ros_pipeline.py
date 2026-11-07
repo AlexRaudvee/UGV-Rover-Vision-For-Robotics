@@ -198,8 +198,11 @@ def test_both_range_sources_tf_width_gaps_previews_and_independent_staleness(
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
             stream(.1, valid_depth=False)
+            # Also wait for polar_hist to process that message; checking its gaps right
+            # after the detector output changed raced the histogram node.
             if (not details['object'][-1]['detections']
-                    and len(details['object'][-1]['unknown_intervals']) == 2):
+                    and len(details['object'][-1]['unknown_intervals']) == 2
+                    and not gaps['object'][-1]['gaps']):
                 break
         assert not details['object'][-1]['detections']
         assert len(details['object'][-1]['unknown_intervals']) == 2
