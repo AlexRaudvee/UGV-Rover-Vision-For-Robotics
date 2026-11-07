@@ -182,3 +182,39 @@ def test_dark_piece_resting_on_an_object_joins_it():
     objects, rejected, _ = run([blob(140, 100, 40, 15), blob(130, 70, 60, 26)], depth, RED)
     assert len(objects) == 1 and [reason for _, reason in rejected] in (
         [NOT_ON_FLOOR], [CONTACT_UNKNOWN])
+
+
+def test_contact_limit_without_depth_below_grows_with_distance():
+    depth = standing_box(floor_depth(0.20, 5.0), 140, 180, 3.0, 80)
+    rows = np.flatnonzero(depth[:, 160] == 3.0)
+    depth[rows[-1] - 5:, 130:190] = np.nan   # base and floor below it: no depth
+    fixed = DetectorSettings(ground_check=True)
+    scaled = DetectorSettings(ground_check=True, contact_height_per_m=0.02)
+    assert [reason for _, reason in run([blob(140, 80, 40, 10)], depth, GREY, fixed)[1]] == [
+        CONTACT_UNKNOWN]
+    assert len(run([blob(140, 80, 40, 10)], depth, GREY, scaled)[0]) == 1
+    depth[rows[-1] - 10:, 130:190] = np.nan   # more of it missing: still unknown
+    assert [reason for _, reason in run([blob(140, 80, 40, 10)], depth, GREY, scaled)[1]] == [
+        CONTACT_UNKNOWN]
+
+
+def test_contact_by_height_ignores_turf_measured_high_below_the_base():
+    from object_detection.grounded import floor_contact, Frame
+    shape = (60, 40)
+    depth = np.full(shape, 2.0)
+    heights = np.zeros(shape)
+    depth[30:40, :] = 1.6     # turf just below the object, measured nearer...
+    heights[30:40, :] = 0.05  # ...and 5 cm above the floor plane
+    valid = np.ones(shape, bool)
+    frame = Frame(depth, heights, valid, valid & (heights <= 0.03), valid & (heights > 0.03))
+    mask = np.ones((20, 10), bool)   # object rows 10-29, base 3 cm above the floor
+    band = DetectorSettings(ground_check=True)
+    height = DetectorSettings(ground_check=True, contact_by_height=True)
+    assert floor_contact(mask, 15, 10, 0.03, frame, band, distance=2.0) == NOT_ON_FLOOR
+    assert floor_contact(mask, 15, 10, 0.03, frame, height, distance=2.0) is None
+    # Base clearly above the limit: still not on the floor.
+    assert floor_contact(mask, 15, 10, 0.15, frame, height, distance=2.0) == NOT_ON_FLOOR
+    # Beyond contact_by_height_max_m the band check applies again.
+    far = DetectorSettings(ground_check=True, contact_by_height=True,
+                           contact_by_height_max_m=1.5)
+    assert floor_contact(mask, 15, 10, 0.03, frame, far, distance=2.0) == NOT_ON_FLOOR

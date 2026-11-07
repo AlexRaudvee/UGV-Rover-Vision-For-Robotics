@@ -232,7 +232,7 @@ class MeasuredDetector(Node):
                                    interpolation=cv2.INTER_NEAREST)
                 if settings.ground_check:
                     heights, floor_note = self.floor_heights(depth, camera, rgb.header.frame_id,
-                                                             settings.floor_refit_frames)
+                                                             settings)
                     objects, rejected, unmeasured_blobs = ground_objects(
                         blobs, bgr, depth, heights, camera, settings)
                     candidates = [item.blob for item in objects]
@@ -317,11 +317,11 @@ class MeasuredDetector(Node):
             self.unavailable(str(error))
             self.get_logger().warn(str(error), throttle_duration_sec=5.0)
 
-    def floor_heights(self, depth, camera, frame_id, refit_frames):
+    def floor_heights(self, depth, camera, frame_id, settings):
         """
         Height above the floor at the ground check's working resolution, or None.
 
-        The floor is refit every refit_frames frames and reused in between.
+        The floor is refit every floor_refit_frames frames and reused in between.
         """
         try:
             transform = self.tf_buffer.lookup_transform(frame_id, self.value('floor_frame'),
@@ -331,7 +331,10 @@ class MeasuredDetector(Node):
         rotation, translation = transform_arrays(transform.transform)
         prior = prior_plane(self.pitch_fix @ rotation, self.pitch_fix @ translation)
         points = working_points(depth, camera.matrix)
-        if self.floor_plane is None or self.floor_frames >= refit_frames:
+        if self.floor_tracker.settings.min_inliers != settings.floor_min_inliers:
+            self.floor_tracker.settings = replace(self.floor_tracker.settings,
+                                                  min_inliers=settings.floor_min_inliers)
+        if self.floor_plane is None or self.floor_frames >= settings.floor_refit_frames:
             self.floor_plane = self.floor_tracker.update(points, prior)
             self.floor_frames = 0
         self.floor_frames += 1

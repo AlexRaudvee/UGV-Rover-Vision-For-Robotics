@@ -30,7 +30,7 @@ class FloorSettings:
     fit_range_max_m: float = 4.0
     max_tilt_change_deg: float = 10.0    # fitted normal vs prior normal
     max_height_change_m: float = 0.10    # fitted camera height vs prior
-    min_inliers: int = 1500              # of ~14k sampled points; real floor gives 3k-6k
+    min_inliers: int = 1000              # of ~14k sampled points; real floor gives 1k-6k
     iterations: int = 150
     sample_step: int = 4                 # use every Nth pixel in both directions
     smoothing: float = 0.5               # weight of the new fit in the running plane

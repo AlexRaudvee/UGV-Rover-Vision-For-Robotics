@@ -41,6 +41,7 @@
     # keep only objects standing on the floor fitted to it. See grounded.py.
     ground_check: true
     floor_refit_frames: 3       # refit the floor every 3rd frame, reuse it in between
+    floor_min_inliers: 1000     # of ~14k sampled points; drive_1 floor gives ~1-3k
     seed_min_pixels: 40
     grow_range_m: 0.20
     grow_range_fraction: 0.10   # same object: within max(grow_range_m, 10% of distance)
@@ -51,6 +52,9 @@
     contact_floor_fraction: 0.5
     contact_min_valid: 0.3
     contact_max_height_m: 0.06
+    contact_height_per_m: 0.02  # height limit grows +2 cm per metre of distance
+    contact_by_height: true     # standing = lowest part within that limit (up to 3 m),
+    contact_by_height_max_m: 3.0   # whatever the turf just below measures; beyond: band check
     piece_min_area: 20.0     # dark pieces this small still count as dark evidence
     sparse_coverage: 0.4     # below this depth coverage the colour region is the object
     # Depth-only objects (grey/backlit boxes): floor-standing, 10-80 cm wide,

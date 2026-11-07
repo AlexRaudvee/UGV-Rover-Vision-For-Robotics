@@ -98,6 +98,7 @@ class DetectorSettings:
     # (see grounded.py). False keeps the colour-only path.
     ground_check: bool = False
     floor_refit_frames: int = 3       # fit the floor every Nth frame, reuse it in between
+    floor_min_inliers: int = 1000     # sampled points within 2 cm a floor plane needs
     seed_min_pixels: int = 40         # full-res px a depth surface needs to count
     grow_range_m: float = 0.20        # surfaces within this distance are one object,
     grow_range_fraction: float = 0.10  # or this fraction of it if larger (stereo noise)
@@ -108,6 +109,9 @@ class DetectorSettings:
     contact_floor_fraction: float = 0.5   # of those with depth, at least this is floor
     contact_min_valid: float = 0.3        # below this share with depth: contact unknown
     contact_max_height_m: float = 0.06    # object's lowest part at most this above floor
+    contact_height_per_m: float = 0.0     # height limit: + this per metre of range
+    contact_by_height: bool = False   # standing = lowest part within the limit, alone
+    contact_by_height_max_m: float = 5.0  # ... only up to this distance
     piece_min_area: float = 20.0      # px; smaller dark specks never count as dark evidence
     sparse_coverage: float = 0.4      # surfaces must explain this much of a dark region
     # Objects without dark-colour support must look like an obstacle (grey boxes).
@@ -140,13 +144,14 @@ def validate(settings):
             and 0 <= settings.depth_ema_tau_s <= 2.0
             and settings.merge_max_gap_px >= 0 and 0 < settings.merge_min_overlap <= 1
             and settings.merge_max_range_diff_m >= 0
-            and settings.floor_refit_frames >= 1
+            and settings.floor_refit_frames >= 1 and settings.floor_min_inliers >= 3
             and settings.seed_min_pixels > 0 and settings.grow_range_m > 0
             and 0 <= settings.grow_range_fraction < 1
             and 0 < settings.dark_min_share <= 1 and settings.contact_band_px > 0
             and settings.edge_step_m > 0 and settings.edge_step_per_m >= 0
             and 0 < settings.contact_floor_fraction <= 1
             and 0 <= settings.contact_min_valid <= 1 and settings.contact_max_height_m > 0
+            and 0 <= settings.contact_height_per_m <= 0.1
             and settings.piece_min_area > 0 and 0 <= settings.sparse_coverage <= 1
             and settings.depth_seed_max_range_m > 0
             and 0 <= settings.depth_seed_max_saturation <= 255

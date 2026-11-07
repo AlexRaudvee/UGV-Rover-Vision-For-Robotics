@@ -180,13 +180,20 @@ class Frame:
     above: np.ndarray
 
 
-def floor_contact(mask, x0, y0, lowest, frame, settings, distance=None):
+def floor_contact(mask, x0, y0, lowest, frame, settings, distance=None, range_m=None):
     """
     Return None if the mask (local, corner x0, y0) stands on the floor, else a reason.
 
     lowest: height of the object's lowest part. With distance given, pixels just below
     the object that look like more of it (above the floor, at its distance: a base row
-    split off by a depth jump) are skipped before the floor band is checked.
+    split off by a depth jump) are skipped before the floor band is checked. Without depth
+    below it, its lowest part may be contact_max_height_m + contact_height_per_m per metre
+    of distance (distance, else range_m) above the floor: stereo noise grows with range.
+
+    With contact_by_height, that height limit alone decides, whatever the band below
+    shows (turf in front of a base often measures a few cm above the plane); the band
+    then only picks the label ('not on floor' with depth below, else 'contact unknown').
+    Only up to contact_by_height_max_m: further away depth is too noisy to trust alone.
     """
     rows = frame.depth.shape[0]
     if y0 + mask.shape[0] >= rows:
@@ -206,9 +213,15 @@ def floor_contact(mask, x0, y0, lowest, frame, settings, distance=None):
     below = np.minimum(bottoms[None, :] + skip + np.arange(1, band + 1)[:, None], rows - 1)
     cols = np.repeat(columns[None, :], band, 0)
     valid = frame.valid[below, cols]
+    reach_m = distance if distance is not None else range_m
+    limit = settings.contact_max_height_m + settings.contact_height_per_m * (
+        reach_m if reach_m is not None and np.isfinite(reach_m) else 0.0)
     if valid.mean() < settings.contact_min_valid:
         # No depth just below it: decide on the object's own lowest part alone.
-        return None if lowest <= settings.contact_max_height_m else CONTACT_UNKNOWN
+        return None if lowest <= limit else CONTACT_UNKNOWN
+    if settings.contact_by_height and (reach_m is None or not np.isfinite(reach_m)
+                                       or reach_m <= settings.contact_by_height_max_m):
+        return None if lowest <= limit else NOT_ON_FLOOR
     if frame.floor[below, cols][valid].mean() < settings.contact_floor_fraction:
         return NOT_ON_FLOOR
     if lowest > settings.contact_max_height_m:
@@ -394,7 +407,8 @@ def ground_objects(blobs, bgr, depth, heights, camera, settings, floor_settings=
         # Lowest part over all its depth, floor-height pixels included: the region
         # reaches down to the floor even where its own base has no depth.
         lowest = float(np.percentile(heights[box][region_valid], 5))
-        reason = floor_contact(region, x0, y0, lowest, frame, settings)
+        reason = floor_contact(region, x0, y0, lowest, frame, settings,
+                               range_m=float(np.median(d[box][region_valid])))
         if reason is None:
             reason = size_problem(Piece(np.ones((bh, bw), bool), bx, by), blob, settings)
         estimate = depth_estimate_for_blob(blob, depth, settings)

@@ -88,7 +88,8 @@ def benchmark(path):
     old.ground_check = False
     camera = CameraModel(640, 360, data['matrix'], data['distortion'])
     prior = prior_plane(data['rotation'], data['translation'])
-    tracker = FloorTracker(FloorSettings(sample_step=4 // grounded.SCALE))
+    tracker = FloorTracker(FloorSettings(sample_step=4 // grounded.SCALE,
+                                         min_inliers=new.floor_min_inliers))
     plane = None
     times = collections.defaultdict(list)
 
