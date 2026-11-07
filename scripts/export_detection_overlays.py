@@ -4,12 +4,13 @@
 Left panel = depth detector, right panel = lidar detector. In both panels:
   green  = detection: an obstacle with a measured distance, any width. The label gives
            distance and width; 'clipped ... >=' marks a blob cut off by the left/right
-           image border, whose width is only a minimum.
+           image border, whose width is only a minimum; '(N merged)' marks a detection
+           merged from N pieces of one object, drawn around their combined box.
   yellow = disregarded for lack of a distance (small label 'no distance' /
            'clipped, no distance'); reported only as an unknown direction
   red    = disregarded for any other reason: 'too small' / 'hollow' / 'too thin' - a dark
            region dropped by the size filters before any distance was measured (regions
-           under MIN_DRAW_AREA px are not drawn)
+           under MIN_DRAW_AREA px, or at least 80% inside a green box, are not drawn)
 
 The detections JSON only stores boxes for measured objects, so the other regions are
 recovered by re-running the detectors' own segmentation on the same image bytes. The
@@ -28,6 +29,7 @@ import sys
 
 import cv2
 import numpy as np
+from object_detection.grounded import inside
 from object_detection.perception import CameraModel, DetectorSettings, find_black_blobs
 from rclpy.serialization import deserialize_message
 import rosbag2_py
@@ -42,6 +44,8 @@ SOURCES = {'/object_detection/detections': 'depth', '/obstacle_detection/detecti
 GREEN, YELLOW, RED = (0, 220, 0), (0, 230, 255), (0, 0, 255)
 MIN_DRAW_AREA = 20   # px; smaller filtered-out specks are noise and would only clutter
 
+
+MAX_T = 39.0   # s; ignore the rest of the bag (robot falls over)
 
 def open_reader(path, topics):
     path = os.path.expanduser(path)
@@ -90,18 +94,47 @@ def measured_items(det):
     return det['blockers'] if 'blockers' in det else det['detections']
 
 
+UNKNOWN_REASONS = ('no distance', 'clipped, no distance', 'contact unknown', 'no floor found',
+                   'held (distance jump)')
+
+
+def detection_text(item):
+    merged = ' (%d merged)' % len(item['parts']) if item.get('parts') else ''
+    if item.get('seed') == 'depth':
+        merged += ' [depth]'
+    if item.get('clipped'):   # side-clipped: width is only a minimum
+        return 'clipped %.2fm >=%.0fcm%s' % (item['distance_m'], item['width_m'] * 100, merged)
+    return '%.2fm %.0fcm%s' % (item['distance_m'], item['width_m'] * 100, merged)
+
+
 def classify(blobs, det):
     """Return (bbox, colour, text) for every blob: green = detection, yellow = no distance."""
-    measured = {tuple(item['bbox']): item for item in measured_items(det)}
-    items = []
+    if det.get('ground_check'):
+        # Ground-checked run: detections are floor-standing objects with their own boxes, and
+        # every rejected colour region is listed with its reason.
+        return ([(tuple(item['bbox']), GREEN, detection_text(item))
+                 for item in det['detections']]
+                + [(tuple(item['bbox']), YELLOW if item['reason'] in UNKNOWN_REASONS else RED,
+                    item['reason']) for item in det.get('rejected', [])])
+    # A merged detection lists the blobs it was built from in 'parts'; map each part to
+    # it and draw it once, around its combined box.
+    measured = {tuple(part): item for item in measured_items(det)
+                for part in (item.get('parts') or [item['bbox']])}
+    items, drawn = [], set()
     for blob in blobs:
         item = measured.get(tuple(blob.bbox))
+        if item is not None:
+            if id(item) in drawn:
+                continue
+            drawn.add(id(item))
+            box = tuple(item['bbox'])
+            merged = ' (%d merged)' % len(item['parts']) if item.get('parts') else ''
         if item and item.get('clipped'):   # side-clipped: width is only a minimum
-            items.append((blob.bbox, GREEN, 'clipped %.2fm >=%.0fcm'
-                          % (item['distance_m'], item['width_m'] * 100)))
+            items.append((box, GREEN, 'clipped %.2fm >=%.0fcm%s'
+                          % (item['distance_m'], item['width_m'] * 100, merged)))
         elif item:
-            items.append((blob.bbox, GREEN,
-                          '%.2fm %.0fcm' % (item['distance_m'], item['width_m'] * 100)))
+            items.append((box, GREEN, '%.2fm %.0fcm%s'
+                          % (item['distance_m'], item['width_m'] * 100, merged)))
         else:
             items.append((blob.bbox, YELLOW,
                           'clipped, no distance' if blob.clipped else 'no distance'))
@@ -164,6 +197,8 @@ def main():
         msg = deserialize_message(raw, CompressedImage)
         key = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
         t0 = key if t0 is None else t0
+        if (key - t0) / 1e9 > MAX_T:
+            continue   # avoidance bag: the robot falls after ~39 s
         if key not in frames or info is None:
             continue   # detectors run at 5 Hz, so most camera frames were not processed
         clean = cv2.imdecode(np.frombuffer(bytes(msg.data), np.uint8), cv2.IMREAD_COLOR)
@@ -185,10 +220,20 @@ def main():
             else:
                 if det.get('blob_count') is not None and det['blob_count'] != len(blobs):
                     mismatched += 1
-                items = dropped + classify(blobs, det)   # detections drawn last, on top
+                kept = classify(blobs, det)
+                # Like the node: a dropped region lying mostly inside a detection's box is
+                # part of that object, not a separate rejection.
+                green = [box for box, colour, _ in kept if colour == GREEN]
+                items = [region for region in dropped
+                         if not any(inside(region[0], box) for box in green)]
+                items += kept   # detections drawn last, on top
                 for (x, y, w, h), colour, _ in items:
                     cv2.rectangle(img, (x, y), (x + w, y + h), colour,
                                   2 if colour == GREEN else 1)
+                for item in det['detections']:   # object shape (ground check)
+                    if item.get('outline'):
+                        cv2.polylines(img, [np.array(item['outline'], np.int32)], True,
+                                      (255, 255, 0), 1, cv2.LINE_AA)
                 # Every box gets a tiny number; its details go in the list below the image.
                 # Order: green (detections), yellow (no distance), red; each left to right.
                 order = {GREEN: 0, YELLOW: 1, RED: 2}
@@ -209,7 +254,7 @@ def main():
             columns.append(np.vstack([strip([(title, (255, 255, 255))], width, 24)[:, :],
                                       img, strip(lines, width, max(1, rows) * LINE_H + 6)]))
         divider = np.full((columns[0].shape[0], 4, 3), 255, np.uint8)
-        cv2.imwrite(os.path.join(out, 't%05.1f.jpg' % t),
+        cv2.imwrite(os.path.join(out, 't%06.2f.jpg' % t),
                     np.hstack([columns[0], divider, columns[1]]), [cv2.IMWRITE_JPEG_QUALITY, 90])
         written += 1
     print('%d frames -> %s' % (written, out))

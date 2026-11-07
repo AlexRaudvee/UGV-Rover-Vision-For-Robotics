@@ -22,7 +22,7 @@ import numpy as np
 def frames(folder):
     found = []
     for name in os.listdir(folder):
-        match = re.fullmatch(r't(\d+\.\d)\.jpg', name)
+        match = re.fullmatch(r't(\d+\.\d+)\.jpg', name)
         if match:
             found.append((float(match.group(1)), os.path.join(folder, name)))
     return sorted(found)
