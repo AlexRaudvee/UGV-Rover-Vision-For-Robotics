@@ -3,6 +3,8 @@
 # Usage: bash run_bag_eval.sh [run_name] [bag] [params_yaml]
 #   bag:         an .mcap file or a rosbag2 folder (with metadata.yaml)
 #   params_yaml: detector overrides for that bag (default: bag_replay.yaml)
+# DETECTORS=improved runs the detection_improved package instead of object_detection,
+# obstacle_detection and polar_hist, under the same topic names (default: DETECTORS=default).
 # Runs on an isolated ROS domain so the bag's /cmd_vel never reaches a real rover.
 set -u
 
@@ -25,14 +27,17 @@ set +u; source /opt/ros/humble/setup.bash; source "$WS/install/setup.bash"; set 
 # Job control: each background job gets its own process group, so cleanup can stop
 # the `ros2 run` wrapper AND the node process it spawns (otherwise nodes outlive the run).
 set -m
-if pgrep -f "lib/(object_detection|obstacle_detection)/detector|lib/polar_hist/histogram" >/dev/null; then
+NODES="lib/(object_detection|obstacle_detection)/detector|lib/polar_hist/histogram|lib/detection_improved/"
+if pgrep -f "$NODES" >/dev/null; then
     echo "Detector/histogram nodes from an earlier run are still running:"
-    pgrep -af "lib/(object_detection|obstacle_detection)/detector|lib/polar_hist/histogram"
-    echo "Stop them first:  pkill -f 'lib/(object_detection|obstacle_detection)/detector|lib/polar_hist/histogram'"
+    pgrep -af "$NODES"
+    echo "Stop them first:  pkill -f '$NODES'"
     exit 1
 fi
 mkdir -p "$LOGS"
 OVR=${3:-$REPO/bag_replay.yaml}
+DETECTORS=${DETECTORS:-default}
+case "$DETECTORS" in default|improved) ;; *) echo "DETECTORS must be default or improved"; exit 1;; esac
 [ -f "$OVR" ] || { echo "Params file not found: $OVR"; exit 1; }
 pids=()
 
@@ -56,15 +61,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "ROS_DOMAIN_ID=$ROS_DOMAIN_ID  run=$RUN  bag=$BAG  params=$OVR"
-ros2 run object_detection detector --ros-args -r __ns:=/object_detection -r __node:=detector \
-    --params-file "$REPO/src/object_detection/config/detector.yaml" --params-file "$OVR" \
-    < /dev/null > "$LOGS/depth.log" 2>&1 & pids+=($!)
-ros2 run obstacle_detection detector --ros-args -r __ns:=/obstacle_detection -r __node:=detector \
-    --params-file "$REPO/src/obstacle_detection/config/detector.yaml" --params-file "$OVR" \
-    < /dev/null > "$LOGS/lidar.log" 2>&1 & pids+=($!)
-ros2 launch polar_hist histogram.launch.py use_sim_time:=true \
-    < /dev/null > "$LOGS/hist.log" 2>&1 & pids+=($!)
+echo "ROS_DOMAIN_ID=$ROS_DOMAIN_ID  run=$RUN  bag=$BAG  params=$OVR  detectors=$DETECTORS"
+if [ "$DETECTORS" = improved ]; then
+    IMP="$REPO/src/detection_improved/config"
+    # Same node names and topics as the default packages, so the recording and the
+    # export scripts do not depend on which detectors produced it.
+    ros2 run detection_improved depth_detector --ros-args -r __ns:=/object_detection \
+        -r __node:=detector --params-file "$IMP/depth.yaml" --params-file "$OVR" \
+        < /dev/null > "$LOGS/depth.log" 2>&1 & pids+=($!)
+    ros2 run detection_improved lidar_detector --ros-args -r __ns:=/obstacle_detection \
+        -r __node:=detector --params-file "$IMP/lidar.yaml" --params-file "$OVR" \
+        < /dev/null > "$LOGS/lidar.log" 2>&1 & pids+=($!)
+    ros2 run detection_improved histogram --ros-args -r __ns:=/polar_hist \
+        -r __node:=polar_hist --params-file "$IMP/histogram.yaml" \
+        -p object_topic:=/object_detection/detections \
+        -p obstacle_topic:=/obstacle_detection/detections \
+        -p frame_prefix:=polar_hist -p use_sim_time:=true \
+        < /dev/null > "$LOGS/hist.log" 2>&1 & pids+=($!)
+else
+    ros2 run object_detection detector --ros-args -r __ns:=/object_detection -r __node:=detector \
+        --params-file "$REPO/src/object_detection/config/detector.yaml" --params-file "$OVR" \
+        < /dev/null > "$LOGS/depth.log" 2>&1 & pids+=($!)
+    ros2 run obstacle_detection detector --ros-args -r __ns:=/obstacle_detection -r __node:=detector \
+        --params-file "$REPO/src/obstacle_detection/config/detector.yaml" --params-file "$OVR" \
+        < /dev/null > "$LOGS/lidar.log" 2>&1 & pids+=($!)
+    ros2 launch polar_hist histogram.launch.py use_sim_time:=true \
+        < /dev/null > "$LOGS/hist.log" 2>&1 & pids+=($!)
+fi
 ros2 bag record -o "$OUT" \
     /object_detection/detections /obstacle_detection/detections \
     /object_detection/debug/compressed /obstacle_detection/debug/compressed \

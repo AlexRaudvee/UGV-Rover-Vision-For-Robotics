@@ -32,6 +32,8 @@ def generate_launch_description():
         DeclareLaunchArgument('obstacles', default_value='true'),
         DeclareLaunchArgument('objects', default_value='true'),
         DeclareLaunchArgument('polar_hist', default_value='true'),
+        DeclareLaunchArgument('improved_detection', default_value='false',
+                              description='Also run detection_improved on its own topics'),
         DeclareLaunchArgument('obstacle_camera', default_value='oak', choices=['oak', 'usb']),
         SetEnvironmentVariable('UGV_MODEL', EnvironmentVariable(
             'UGV_MODEL', default_value='ugv_rover')),
@@ -49,4 +51,6 @@ def generate_launch_description():
                 camera=LaunchConfiguration('obstacle_camera')),
         include('object_detection', 'detection.launch.py', 'objects'),
         include('polar_hist', 'histogram.launch.py', 'polar_hist'),
+        include('detection_improved', 'detection.launch.py', 'improved_detection',
+                camera=LaunchConfiguration('obstacle_camera')),
     ])
