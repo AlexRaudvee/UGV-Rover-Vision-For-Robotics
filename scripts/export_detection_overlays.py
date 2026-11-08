@@ -8,20 +8,27 @@ Left panel = depth detector, right panel = lidar detector. In both panels:
            merged from N pieces of one object, drawn around their combined box.
   yellow = disregarded for lack of a distance (small label 'no distance' /
            'clipped, no distance'); reported only as an unknown direction
-  red    = disregarded for any other reason: 'too small' / 'hollow' / 'too thin' - a dark
-           region dropped by the size filters before any distance was measured (regions
-           under MIN_DRAW_AREA px, or at least 80% inside a green box, are not drawn)
+  red    = disregarded by the detector for any other reason, with its reason (e.g. the
+           ground check's 'not on floor')
+  thin dark red, unnumbered = a dark speck dropped by the colour size filters ('too
+           small' / 'hollow' / 'too thin') before any distance was measured; only counted
+           per reason under the list (specks under MIN_DRAW_AREA px, or at least 80%
+           inside a green box, are not drawn)
 
 The detections JSON only stores boxes for measured objects, so the other regions are
 recovered by re-running the detectors' own segmentation on the same image bytes. The
-re-segmentation uses the currently installed detector code, so only export runs that
-were recorded with the same segmentation code.
+re-segmentation uses the installed detection_improved code, so only export runs that
+were recorded with it (DETECTORS=improved bash run_bag_eval.sh ...).
 
 Usage (ROS and the workspace sourced):
     python3 scripts/export_detection_overlays.py ~/bags/eval_run5 \
-        ~/bags/avoidance_cleaned_v2.mcap [out_dir]
+        ~/bags/avoidance_cleaned_v2.mcap [out_dir] [--max-t SECONDS]
+
+--max-t: last bag time to export (default 39 s: the avoidance bag's robot falls over
+after that). Use e.g. --max-t 1e9 for a whole recording.
 """
 
+import collections
 import json
 import math
 import os
@@ -29,8 +36,8 @@ import sys
 
 import cv2
 import numpy as np
-from object_detection.grounded import inside
-from object_detection.perception import CameraModel, DetectorSettings, find_black_blobs
+from detection_improved.grounded import inside
+from detection_improved.perception import CameraModel, DetectorSettings, find_black_blobs
 from rclpy.serialization import deserialize_message
 import rosbag2_py
 from sensor_msgs.msg import CameraInfo, CompressedImage
@@ -42,10 +49,12 @@ INFO_TOPIC = '/oak/rgb/camera_info'
 MAX_WIDTH = 640   # the detectors' max_width: images are shrunk to this before segmentation
 SOURCES = {'/object_detection/detections': 'depth', '/obstacle_detection/detections': 'lidar'}
 GREEN, YELLOW, RED = (0, 220, 0), (0, 230, 255), (0, 0, 255)
+SPECK = (0, 0, 140)   # dark red: colour specks dropped by the size filters
 MIN_DRAW_AREA = 20   # px; smaller filtered-out specks are noise and would only clutter
 
 
-MAX_T = 39.0   # s; ignore the rest of the bag (robot falls over)
+MAX_T = 39.0   # s; default: ignore the rest of the avoidance bag (robot falls over)
+
 
 def open_reader(path, topics):
     path = os.path.expanduser(path)
@@ -84,7 +93,13 @@ def strip(lines, width, height, columns=COLUMNS):
     rows = math.ceil(len(lines) / columns)
     for i, (text, colour) in enumerate(lines):
         column, row = divmod(i, rows) if rows else (0, 0)
-        cv2.putText(out, text, (6 + column * width // columns, 13 + row * LINE_H), FONT, 0.38,
+        # Fit the entry into its column: shrink the font a little, then shorten it.
+        room, scale = width // columns - 10, 0.38
+        while cv2.getTextSize(text, FONT, scale, 1)[0][0] > room and scale > 0.31:
+            scale -= 0.01
+        while cv2.getTextSize(text, FONT, scale, 1)[0][0] > room and len(text) > 4:
+            text = text[:-3] + '..'
+        cv2.putText(out, text, (6 + column * width // columns, 13 + row * LINE_H), FONT, scale,
                     colour, 1, cv2.LINE_AA)
     return out
 
@@ -144,7 +159,7 @@ def classify(blobs, det):
 def filtered_regions(mask, blobs, camera, settings):
     """Dark regions dropped by find_black_blobs' size filters, with the reason.
 
-    Mirrors the filter order in object_detection.perception.find_black_blobs.
+    Mirrors the filter order in detection_improved.perception.find_black_blobs.
     """
     kept = {tuple(blob.bbox) for blob in blobs}
     regions = []
@@ -166,7 +181,12 @@ def filtered_regions(mask, blobs, camera, settings):
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    argv = sys.argv[1:]
+    max_t = MAX_T
+    if '--max-t' in argv:
+        i = argv.index('--max-t')
+        max_t, argv = float(argv[i + 1]), argv[:i] + argv[i + 2:]
+    args = [a for a in argv if not a.startswith('--')]
     eval_bag, input_bag = args[0], args[1]
     out = os.path.expanduser(args[2] if len(args) > 2 else eval_bag.rstrip('/') + '_detections')
     os.makedirs(out, exist_ok=True)
@@ -197,7 +217,7 @@ def main():
         msg = deserialize_message(raw, CompressedImage)
         key = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
         t0 = key if t0 is None else t0
-        if (key - t0) / 1e9 > MAX_T:
+        if (key - t0) / 1e9 > max_t:
             continue   # avoidance bag: the robot falls after ~39 s
         if key not in frames or info is None:
             continue   # detectors run at 5 Hz, so most camera frames were not processed
@@ -220,14 +240,16 @@ def main():
             else:
                 if det.get('blob_count') is not None and det['blob_count'] != len(blobs):
                     mismatched += 1
-                kept = classify(blobs, det)
+                items = classify(blobs, det)
                 # Like the node: a dropped region lying mostly inside a detection's box is
                 # part of that object, not a separate rejection.
-                green = [box for box, colour, _ in kept if colour == GREEN]
-                items = [region for region in dropped
-                         if not any(inside(region[0], box) for box in green)]
-                items += kept   # detections drawn last, on top
-                for (x, y, w, h), colour, _ in items:
+                green = [box for box, colour, _ in items if colour == GREEN]
+                specks = [region for region in dropped
+                          if not any(inside(region[0], box) for box in green)]
+                # Specks: thin, unnumbered (their numbers landed on nearby big boxes).
+                for (x, y, w, h), _, _ in specks:
+                    cv2.rectangle(img, (x, y), (x + w, y + h), SPECK, 1)
+                for (x, y, w, h), colour, _ in items:   # detections drawn last, on top
                     cv2.rectangle(img, (x, y), (x + w, y + h), colour,
                                   2 if colour == GREEN else 1)
                 for item in det['detections']:   # object shape (ground check)
@@ -243,6 +265,10 @@ def main():
                     tag(img, x, y, str(number), colour)
                 for number, (_, colour, text) in enumerate(listed, 1):
                     lines.append(('%d: %s' % (number, text), colour))
+                if specks:
+                    counts = collections.Counter(reason for _, _, reason in specks)
+                    lines.append(('unnumbered specks: ' + ', '.join(
+                        '%d %s' % (n, reason) for reason, n in counts.most_common()), SPECK))
                 found = sum(colour == GREEN for _, colour, _ in items)
                 title = '%s: %d detection(s), %d disregarded   t=%.1fs' % (
                     name.upper(), found, len(items) - found, t)

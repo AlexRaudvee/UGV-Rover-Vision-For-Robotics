@@ -22,11 +22,11 @@ import sys
 
 import cv2
 import numpy as np
-from object_detection.floor import (classify, depth_points, FloorSettings, FloorTracker,
-                                    prior_plane)
-from object_detection.image_io import decode_depth
-from object_detection.node import pitch_correction, transform_arrays
-from object_detection.perception import CameraModel, DetectorSettings, scan_points_in_camera
+from detection_improved.floor import (classify, depth_points, FloorSettings, FloorTracker,
+                                      prior_plane)
+from detection_improved.image_io import decode_depth
+from detection_improved.detector import pitch_correction, transform_arrays
+from detection_improved.perception import CameraModel, DetectorSettings, scan_points_in_camera
 from rclpy.serialization import deserialize_message
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, LaserScan

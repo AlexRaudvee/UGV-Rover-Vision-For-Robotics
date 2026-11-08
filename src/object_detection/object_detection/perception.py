@@ -88,41 +88,6 @@ class DetectorSettings:
     range_track_timeout_s: float = 0.6
     range_jump_m: float = 0.20
     depth_ema_tau_s: float = 0.35
-    # Merge detections that are pieces of one object (e.g. a rover's deck and track):
-    # overlapping horizontally, close vertically, at about the same distance.
-    # merge_max_gap_px = 0 disables merging.
-    merge_max_gap_px: float = 0.0
-    merge_min_overlap: float = 0.5
-    merge_max_range_diff_m: float = 0.3
-    # Depth only: keep only objects standing on the floor fitted to the depth image
-    # (see grounded.py). False keeps the colour-only path.
-    ground_check: bool = False
-    floor_refit_frames: int = 3       # fit the floor every Nth frame, reuse it in between
-    floor_min_inliers: int = 1000     # sampled points within 2 cm a floor plane needs
-    seed_min_pixels: int = 40         # full-res px a depth surface needs to count
-    grow_range_m: float = 0.20        # surfaces within this distance are one object,
-    grow_range_fraction: float = 0.10  # or this fraction of it if larger (stereo noise)
-    edge_step_m: float = 0.04         # depth jump that separates objects: this +
-    edge_step_per_m: float = 0.02     # this per metre of distance (stereo noise grows)
-    dark_min_share: float = 0.3       # share of dark pixels for a colour-supported object
-    contact_band_px: int = 6          # pixels checked below the object's bottom edge
-    contact_floor_fraction: float = 0.5   # of those with depth, at least this is floor
-    contact_min_valid: float = 0.3        # below this share with depth: contact unknown
-    contact_max_height_m: float = 0.06    # object's lowest part at most this above floor
-    contact_height_per_m: float = 0.0     # height limit: + this per metre of range
-    contact_by_height: bool = False   # standing = lowest part within the limit, alone
-    contact_by_height_max_m: float = 5.0  # ... only up to this distance
-    piece_min_area: float = 20.0      # px; smaller dark specks never count as dark evidence
-    sparse_coverage: float = 0.4      # surfaces must explain this much of a dark region
-    # Objects without dark-colour support must look like an obstacle (grey boxes).
-    depth_seed_max_range_m: float = 4.0
-    depth_seed_min_width_m: float = 0.10
-    depth_seed_max_width_m: float = 0.80
-    depth_seed_max_height_m: float = 0.60
-    depth_seed_min_height_m: float = 0.10
-    depth_seed_max_saturation: float = 60.0   # HSV saturation; rejects the red barriers
-    # Temporal jump gate: max(range_jump_m, this fraction of the distance).
-    range_jump_fraction: float = 0.0
 
 
 def validate(settings):
@@ -141,23 +106,7 @@ def validate(settings):
             and settings.max_surface_std_m > 0 and 0 <= settings.width_tolerance_m <= 0.03
             and 1 <= settings.range_window <= 9
             and settings.range_track_timeout_s > 0 and settings.range_jump_m > 0
-            and 0 <= settings.depth_ema_tau_s <= 2.0
-            and settings.merge_max_gap_px >= 0 and 0 < settings.merge_min_overlap <= 1
-            and settings.merge_max_range_diff_m >= 0
-            and settings.floor_refit_frames >= 1 and settings.floor_min_inliers >= 3
-            and settings.seed_min_pixels > 0 and settings.grow_range_m > 0
-            and 0 <= settings.grow_range_fraction < 1
-            and 0 < settings.dark_min_share <= 1 and settings.contact_band_px > 0
-            and settings.edge_step_m > 0 and settings.edge_step_per_m >= 0
-            and 0 < settings.contact_floor_fraction <= 1
-            and 0 <= settings.contact_min_valid <= 1 and settings.contact_max_height_m > 0
-            and 0 <= settings.contact_height_per_m <= 0.1
-            and settings.piece_min_area > 0 and 0 <= settings.sparse_coverage <= 1
-            and settings.depth_seed_max_range_m > 0
-            and 0 <= settings.depth_seed_max_saturation <= 255
-            and 0 < settings.depth_seed_min_width_m <= settings.depth_seed_max_width_m
-            and 0 < settings.depth_seed_min_height_m < settings.depth_seed_max_height_m
-            and 0 <= settings.range_jump_fraction < 1):
+            and 0 <= settings.depth_ema_tau_s <= 2.0):
         raise ValueError('Invalid color, blob, width, range, or sample limits')
 
 
@@ -173,9 +122,6 @@ class Blob:
     ray_span: float
     area_px: float
     clipped: bool
-    # Failed the size filters but kept as a possible piece of a larger object
-    # (find_black_blobs keep_small=True; depth ground check only).
-    small: bool = False
 
     def interval(self):
         """Return an unresolved angular interval for downstream consumers."""
@@ -196,36 +142,19 @@ class Detection:
     area_px: float
     width_m: float = 0.0
     axial_m: float = 0.0
-    # Informational: measured width is in the target band (23-33 cm) and fully visible.
-    # Every Detection is an obstacle regardless of this flag.
     accepted: bool = True
     width_std_m: float = 0.0
     range_std_m: float = 0.0
     sample_count: int = 0
     nominal_width: bool = True
-    # Cut off by the left/right image border: width_m is only a lower bound, so the
-    # width can never be confirmed to be in the target band (accepted stays False).
-    clipped: bool = False
-    # For a merged detection: the image boxes of the blobs it was merged from
-    # (bbox is then their union). None for a single blob.
-    parts: tuple = None
-    # Depth ground check: object top above the floor, and its simplified outline.
-    height_m: float = 0.0
-    outline: list = None
-    seed: str = 'colour'   # ground check: started by a 'colour' region or by 'depth'
 
     def to_dict(self):
         """Serialize only finite metric measurements."""
         return asdict(self)
 
 
-def find_black_blobs(bgr, camera, settings, keep_small=False):
-    """
-    Segment near-black connected silhouettes without assuming their size.
-
-    keep_small: also return regions failing the size filters (down to piece_min_area),
-    marked small=True, so the depth ground check can combine pieces of one object.
-    """
+def find_black_blobs(bgr, camera, settings):
+    """Segment near-black connected silhouettes without assuming their size."""
     if bgr.shape[:2] != (camera.height, camera.width):
         raise ValueError('Image and camera calibration sizes differ')
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -237,9 +166,8 @@ def find_black_blobs(bgr, camera, settings, keep_small=False):
     for contour in contours:
         area = cv2.contourArea(contour)
         x, y, width, height = cv2.boundingRect(contour)
-        small = (area < settings.min_area or width < settings.min_width
-                 or height < settings.min_height or area / (width * height) < settings.min_fill)
-        if small and not (keep_small and area >= settings.piece_min_area):
+        if (area < settings.min_area or width < settings.min_width
+                or height < settings.min_height or area / (width * height) < settings.min_fill):
             continue
         rays = camera.horizontal_rays([(x, y + height / 2),
                                        (x + width, y + height / 2),
@@ -250,15 +178,11 @@ def find_black_blobs(bgr, camera, settings, keep_small=False):
         ray_span = abs(float(rays[1] - rays[0]))
         # A tiny color speck cannot be a target-width object even at maximum range.
         if ray_span * settings.range_max < settings.width_min_m - settings.width_tolerance_m:
-            if not keep_small:
-                continue
-            small = True
-        # Only the left/right border can cut off the (horizontal) width; touching the
-        # top or bottom border leaves the measured width complete.
-        clipped = x <= 0 or x + width >= camera.width
+            continue
+        clipped = x <= 0 or y <= 0 or x + width >= camera.width or y + height >= camera.height
         blobs.append(Blob((x, y, width, height), contour, float(angles[2]),
                           float(min(angles[:2])), float(max(angles[:2])),
-                          ray_span, float(area), clipped, small))
+                          ray_span, float(area), clipped))
     return blobs, mask
 
 
@@ -277,9 +201,7 @@ class RangeEstimate:
 
 def measure_blob(blob, axial_m, source, settings, estimate=None):
     """Compute width = optical Z * (right X/Z - left X/Z)."""
-    # A clipped blob keeps its measured distance (it is a detection), but its width is
-    # only a lower bound, so it is never marked as target-sized (accepted).
-    if not math.isfinite(axial_m) or axial_m <= 0:
+    if blob.clipped or not math.isfinite(axial_m) or axial_m <= 0:
         return None
     distance = axial_m / math.cos(blob.bearing)
     if not settings.range_min <= distance <= settings.range_max:
@@ -289,77 +211,14 @@ def measure_blob(blob, axial_m, source, settings, estimate=None):
     width_std = (math.hypot(blob.ray_span * estimate.std_m, 0.005)
                  if estimate is not None else 0.0)
     tolerance = min(settings.width_tolerance_m, 2 * width_std)
-    accepted = not blob.clipped and settings.width_min_m - tolerance - 1e-7 <= width <= (
+    accepted = settings.width_min_m - tolerance - 1e-7 <= width <= (
         settings.width_max_m + tolerance + 1e-7)
     confidence = (max(0.2, 1 - estimate.std_m / settings.max_surface_std_m)
                   if estimate is not None else 1.0)
     return Detection(blob.bbox, blob.bearing, blob.angle_min, blob.angle_max,
                      distance, source, confidence, blob.area_px, width, axial_m, accepted,
                      width_std, estimate.std_m / math.cos(blob.bearing) if estimate else 0.0,
-                     estimate.samples if estimate else 0, nominal and not blob.clipped,
-                     blob.clipped)
-
-
-def mergeable(first, second, settings):
-    """Return whether two detections look like pieces of one object."""
-    ax, ay, aw, ah = first.bbox
-    bx, by, bw, bh = second.bbox
-    overlap = min(ax + aw, bx + bw) - max(ax, bx)
-    if overlap < settings.merge_min_overlap * min(aw, bw):
-        return False
-    gap = max(ay, by) - min(ay + ah, by + bh)   # negative when they overlap vertically
-    if gap > max(settings.merge_max_gap_px, 0.1 * max(ah, bh)):
-        return False
-    return abs(first.distance_m - second.distance_m) <= settings.merge_max_range_diff_m
-
-
-def merge_pair(first, second, settings):
-    """Combine two detection pieces into one; distance from the nearer piece."""
-    near = first if first.distance_m <= second.distance_m else second
-    angle_min = min(first.angle_min, second.angle_min)
-    angle_max = max(first.angle_max, second.angle_max)
-    bearing = (angle_min + angle_max) / 2
-    # Angles are -atan(X/Z), so the optical X/Z span is the tangent difference.
-    width = near.axial_m * abs(math.tan(angle_max) - math.tan(angle_min))
-    width_std = max(first.width_std_m, second.width_std_m)
-    clipped = first.clipped or second.clipped
-    tolerance = min(settings.width_tolerance_m, 2 * width_std)
-    accepted = not clipped and settings.width_min_m - tolerance - 1e-7 <= width <= (
-        settings.width_max_m + tolerance + 1e-7)
-    nominal = (not clipped
-               and settings.width_min_m - 1e-7 <= width <= settings.width_max_m + 1e-7)
-    x = min(first.bbox[0], second.bbox[0])
-    y = min(first.bbox[1], second.bbox[1])
-    right = max(first.bbox[0] + first.bbox[2], second.bbox[0] + second.bbox[2])
-    bottom = max(first.bbox[1] + first.bbox[3], second.bbox[1] + second.bbox[3])
-    parts = (first.parts or (first.bbox,)) + (second.parts or (second.bbox,))
-    return Detection((x, y, right - x, bottom - y), bearing, angle_min, angle_max,
-                     near.distance_m, near.distance_source,
-                     min(first.confidence, second.confidence),
-                     first.area_px + second.area_px, width, near.axial_m, accepted, width_std,
-                     max(first.range_std_m, second.range_std_m),
-                     first.sample_count + second.sample_count, nominal, clipped, parts,
-                     max(first.height_m, second.height_m))
-
-
-def merge_detections(items, settings):
-    """Repeatedly merge detection pieces of one object (see mergeable)."""
-    if settings.merge_max_gap_px <= 0:
-        return list(items)
-    items = list(items)
-    merged = True
-    while merged:
-        merged = False
-        for i in range(len(items)):
-            for j in range(i + 1, len(items)):
-                if mergeable(items[i], items[j], settings):
-                    items[i] = merge_pair(items[i], items[j], settings)
-                    del items[j]
-                    merged = True
-                    break
-            if merged:
-                break
-    return items
+                     estimate.samples if estimate else 0, nominal)
 
 
 def depth_for_blob(blob, depth_m, settings):

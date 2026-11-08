@@ -6,7 +6,7 @@ frames. To benchmark on the robot without copying the whole bag, export frames f
 
     # on the laptop (ROS sourced): save every 4th frame up to 39 s
     python3 scripts/benchmark_detection.py --save frames.npz ~/bags/avoidance_cleaned_v2.mcap
-    # on the robot / anywhere with object_detection installed
+    # on the robot / anywhere with detection_improved installed
     python3 scripts/benchmark_detection.py frames.npz
 
 Prints median / 95th percentile / max milliseconds per step.
@@ -19,23 +19,23 @@ import time
 
 import cv2
 import numpy as np
-from object_detection.floor import FloorSettings, FloorTracker, prior_plane
-import object_detection.grounded as grounded
-from object_detection.node import pitch_correction
-from object_detection.perception import (CameraModel, depth_estimate_for_blob,
-                                         DetectorSettings, find_black_blobs, measure_blob,
-                                         merge_detections)
+from detection_improved.floor import FloorSettings, FloorTracker, prior_plane
+import detection_improved.grounded as grounded
+from detection_improved.detector import pitch_correction
+from detection_improved.perception import (CameraModel, depth_estimate_for_blob,
+                                           DetectorSettings, find_black_blobs, measure_blob,
+                                           merge_detections)
 import yaml
 
 CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src',
-                      'object_detection', 'config', 'detector.yaml')
+                      'detection_improved', 'config', 'depth.yaml')
 
 
 def export(bag, out, every=4, max_t=39.0, pitch=5.0):
     """Save resized RGB, depth, intrinsics and the floor prior from a bag to .npz."""
     from export_detection_overlays import open_reader
     from export_sensor_overlays import _Bridge, transform_arrays
-    from object_detection.image_io import decode_depth
+    from detection_improved.image_io import decode_depth
     from rclpy.serialization import deserialize_message
     from rclpy.time import Time
     from sensor_msgs.msg import CameraInfo, CompressedImage, Image

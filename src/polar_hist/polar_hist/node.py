@@ -113,7 +113,7 @@ class PolarHistogramNode(Node):
                     or not -math.pi/2 < fov[0] < fov[1] < math.pi/2):
                 raise ValueError('Invalid camera frame or field of view')
             blockers = []
-            for item in (Detection(**entry) for entry in payload['detections']):
+            for item in (Detection(**entry) for entry in payload['blockers']):
                 clipped = clip_to_fov(item.angle_min, item.angle_max, fov)
                 if clipped is None or not item.angle_min <= item.bearing <= item.angle_max:
                     raise ValueError('Invalid measured obstacle geometry')

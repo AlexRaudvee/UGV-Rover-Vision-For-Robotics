@@ -31,39 +31,5 @@
     range_window: 3
     range_track_timeout_s: 0.6
     range_jump_m: 0.20
-    range_jump_fraction: 0.08   # gate = max(range_jump_m, 8% of distance): stereo noise grows
-    # Merge pieces of one object (overlapping horizontally, <= gap px apart vertically,
-    # within merge_max_range_diff_m of each other). 0 disables merging.
-    merge_max_gap_px: 20.0   # also: a dark piece resting on a kept object joins it
-    merge_min_overlap: 0.5
-    merge_max_range_diff_m: 0.3
-    # Ground check (depth only): one pass at half resolution over the depth image;
-    # keep only objects standing on the floor fitted to it. See grounded.py.
-    ground_check: true
-    floor_refit_frames: 3       # refit the floor every 3rd frame, reuse it in between
-    floor_min_inliers: 1000     # of ~14k sampled points; drive_1 floor gives ~1-3k
-    seed_min_pixels: 40
-    grow_range_m: 0.20
-    grow_range_fraction: 0.10   # same object: within max(grow_range_m, 10% of distance)
-    edge_step_m: 0.04
-    edge_step_per_m: 0.02
-    dark_min_share: 0.3         # this share dark: a colour object, else depth-only
-    contact_band_px: 6
-    contact_floor_fraction: 0.5
-    contact_min_valid: 0.3
-    contact_max_height_m: 0.06
-    contact_height_per_m: 0.02  # height limit grows +2 cm per metre of distance
-    contact_by_height: true     # standing = lowest part within that limit (up to 3 m),
-    contact_by_height_max_m: 3.0   # whatever the turf just below measures; beyond: band check
-    piece_min_area: 20.0     # dark pieces this small still count as dark evidence
-    sparse_coverage: 0.4     # below this depth coverage the colour region is the object
-    # Depth-only objects (grey/backlit boxes): floor-standing, 10-80 cm wide,
-    # top 10-60 cm high, within 4 m, greyish (not the red barriers).
-    depth_seed_max_range_m: 4.0
-    depth_seed_min_width_m: 0.10
-    depth_seed_max_width_m: 0.80
-    depth_seed_max_height_m: 0.60
-    depth_seed_min_height_m: 0.10
-    depth_seed_max_saturation: 60.0
     # Time-based EMA: about 44% new data per 0.2 s frame; zero disables it.
     depth_ema_tau_s: 0.6

@@ -1,7 +1,7 @@
 """Shared ROS adapter for measured RGB/depth and RGB/LiDAR detections."""
 
 from collections import deque
-from dataclasses import fields, replace
+from dataclasses import fields
 import json
 import math
 import time
@@ -18,13 +18,11 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, Image, LaserScan
 from std_msgs.msg import Header, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from .floor import FloorSettings, FloorTracker, prior_plane
-from .grounded import ground_objects, SCALE, working_points
 from .image_io import annotated_image, decode_depth, depth_preview, publish_jpeg, waiting_image
 from .perception import (
     CameraModel, depth_estimate_for_blob, DetectorSettings, find_black_blobs,
     lidar_estimates_for_blobs,
-    measure_blob, merge_detections, scan_points_in_camera, validate,
+    measure_blob, scan_points_in_camera, validate,
 )
 from .ranging import TemporalRanges
 from .synchronization import select_pair, stamp_ns
@@ -76,10 +74,8 @@ class MeasuredDetector(Node):
             'depth_transport': 'compressedDepth',
             'scan_topic': '/scan', 'rectified': True, 'rate_hz': 5.0, 'max_width': 640,
             'reliable_input': True,
-            # Camera pitch (down positive) missing from TF; applied to the LiDAR
-            # projection and to the floor prior (ground check).
+            # Camera pitch (down positive) missing from TF; applied to LiDAR projection only.
             'camera_pitch_down_deg': 0.0,
-            'floor_frame': 'base_footprint',   # its z = 0 plane is the floor prior
         }
         for name, value in static.items():
             self.declare_parameter(name, value, ParameterDescriptor(read_only=True))
@@ -129,11 +125,7 @@ class MeasuredDetector(Node):
             sensor_type, sensor_topic, self.receive_measurement,
             image_qos if mode == 'depth' else qos_profile_sensor_data)
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-        # Half-resolution points with every 2nd sampled: the same sample count as
-        # every 4th pixel at full resolution.
-        self.floor_tracker = FloorTracker(FloorSettings(sample_step=4 // SCALE))
-        self.floor_plane, self.floor_frames = None, 0
+        self.tf_listener = TransformListener(self.tf_buffer, self) if mode == 'lidar' else None
         self.timer = self.create_timer(1.0 / self.value('rate_hz'), self.tick)
         self.get_logger().info(f'{namespace}: {self.value("rgb_topic")} + {sensor_topic}')
 
@@ -214,10 +206,7 @@ class MeasuredDetector(Node):
             camera = CameraModel.from_info(self.camera_info, bgr.shape[1], bgr.shape[0],
                                            self.value('rectified'))
             settings = self.settings()
-            grounded = self.mode == 'depth' and settings.ground_check
-            # Ground check: keep small pieces too; they count as dark evidence.
-            blobs, _ = find_black_blobs(bgr, camera, settings, keep_small=grounded)
-            blob_count = sum(not blob.small for blob in blobs)
+            blobs, _ = find_black_blobs(bgr, camera, settings)
             if sensor is None:
                 raise ValueError('No synchronized ' + self.mode + '; physical width is unknown')
             self.check_stamp(sensor)
@@ -230,17 +219,7 @@ class MeasuredDetector(Node):
                     raise ValueError('Aligned depth and RGB resolutions differ')
                 depth = cv2.resize(depth, (camera.width, camera.height),
                                    interpolation=cv2.INTER_NEAREST)
-                if settings.ground_check:
-                    heights, floor_note = self.floor_heights(depth, camera, rgb.header.frame_id,
-                                                             settings)
-                    objects, rejected, unmeasured_blobs = ground_objects(
-                        blobs, bgr, depth, heights, camera, settings)
-                    candidates = [item.blob for item in objects]
-                    estimates = [item.estimate for item in objects]
-                else:
-                    candidates = blobs
-                    estimates = [depth_estimate_for_blob(blob, depth, settings)
-                                 for blob in blobs]
+                estimates = [depth_estimate_for_blob(blob, depth, settings) for blob in blobs]
                 if self.depth_pub.get_subscription_count():
                     preview = depth_preview(depth, settings.range_min, settings.range_max)
                     publish_jpeg(self.depth_pub, preview, sensor.header)
@@ -253,52 +232,34 @@ class MeasuredDetector(Node):
                 rotation, translation = transform_arrays(transform.transform)
                 rotation, translation = self.pitch_fix @ rotation, self.pitch_fix @ translation
                 points = scan_points_in_camera(sensor, rotation, translation)
-                candidates = blobs
                 estimates = lidar_estimates_for_blobs(blobs, points, camera, settings)
             if self.range_frame != rgb.header.frame_id:
                 self.range_filter.clear()
                 self.range_frame = rgb.header.frame_id
-            if not grounded:
-                objects, rejected, unmeasured_blobs, floor_note = None, [], [], ''
-            estimates = self.range_filter.update(candidates, estimates, stamp_ns(rgb) / 1e9,
-                                                 settings)
-            measured = []
-            for index, (blob, estimate) in enumerate(zip(candidates, estimates)):
+            estimates = self.range_filter.update(blobs, estimates, stamp_ns(rgb) / 1e9, settings)
+            measured, unknown = [], []
+            for blob, estimate in zip(blobs, estimates):
                 item = measure_blob(blob, estimate.axial_m, self.mode, settings, estimate)
                 if item is None:
-                    unmeasured_blobs.append(blob)
-                    if grounded:   # withheld by the temporal jump gate this frame
-                        rejected.append((blob.bbox, 'held (distance jump)'))
-                    continue
-                if grounded:
-                    item = replace(item, height_m=objects[index].height_m,
-                                   outline=objects[index].outline,
-                                   seed=objects[index].seed)
-                measured.append(item)
-            unknown = [blob.interval() for blob in unmeasured_blobs]
-            measured = merge_detections(measured, settings)   # pieces of one object
+                    unknown.append(blob.interval())
+                else:
+                    measured.append(item)
             acquisition_age = max(0, self.get_clock().now().nanoseconds
                                   - min(stamp_ns(rgb), stamp_ns(sensor))) / 1e9
             self.last_good_received = min(received, time.monotonic() - acquisition_age)
-            target_count = sum(item.accepted for item in measured)
-            clipped_count = sum(item.clipped for item in measured)
-            status = (f'{self.mode}: {blob_count} blobs; {len(measured)} detections '
-                      f'({target_count} target size, {clipped_count} clipped); '
-                      f'{len(unknown)} unmeasured'
-                      + (f'; {len(rejected)} rejected; {floor_note}' if grounded else ''))
+            accepted_count = sum(item.accepted for item in measured)
+            status = (f'{self.mode}: {len(blobs)} blobs; {accepted_count} accepted; '
+                      f'{len(measured) - accepted_count} wrong size; '
+                      f'{len(unknown)} uncertain/clipped')
             payload = self.payload(rgb.header, True, status)
             payload.update({
                 'field_of_view': list(camera.field_of_view()),
-                # Every object with a measured distance is a detection (an obstacle);
-                # 'accepted' only records whether its width is in the target band.
-                'detections': [item.to_dict() for item in measured],
+                'detections': [item.to_dict() for item in measured if item.accepted],
+                'blockers': [item.to_dict() for item in measured],
                 'unknown_intervals': unknown,
-                'blob_count': blob_count, 'measured_count': len(measured),
+                'blob_count': len(blobs), 'measured_count': len(measured),
                 'width_band_m': [settings.width_min_m, settings.width_max_m],
                 'width_tolerance_m': settings.width_tolerance_m,
-                # Ground check: regions that are not floor-standing objects, with reason.
-                'ground_check': grounded, 'floor': floor_note,
-                'rejected': [{'bbox': list(box), 'reason': reason} for box, reason in rejected],
             })
             if self.mode == 'depth':
                 payload['depth_ema_tau_s'] = settings.depth_ema_tau_s
@@ -307,41 +268,15 @@ class MeasuredDetector(Node):
                     'raw_distance_m': estimate.raw_axial_m / math.cos(blob.bearing),
                     'distance_m': estimate.axial_m / math.cos(blob.bearing),
                     'ema_alpha': estimate.ema_alpha,
-                } for blob, estimate in zip(candidates, estimates)
+                } for blob, estimate in zip(blobs, estimates)
                     if math.isfinite(estimate.axial_m) and math.isfinite(estimate.raw_axial_m)]
             self.details_pub.publish(String(data=json.dumps(payload, allow_nan=False)))
             if self.debug_pub.get_subscription_count():
-                debug = annotated_image(bgr, unmeasured_blobs, measured, status)
+                debug = annotated_image(bgr, blobs, measured, status)
                 publish_jpeg(self.debug_pub, debug, rgb.header)
         except (ValueError, TypeError, CvBridgeError, cv2.error, TransformException) as error:
             self.unavailable(str(error))
             self.get_logger().warn(str(error), throttle_duration_sec=5.0)
-
-    def floor_heights(self, depth, camera, frame_id, settings):
-        """
-        Height above the floor at the ground check's working resolution, or None.
-
-        The floor is refit every floor_refit_frames frames and reused in between.
-        """
-        try:
-            transform = self.tf_buffer.lookup_transform(frame_id, self.value('floor_frame'),
-                                                        Time())
-        except TransformException:
-            return None, 'no TF to ' + self.value('floor_frame')
-        rotation, translation = transform_arrays(transform.transform)
-        prior = prior_plane(self.pitch_fix @ rotation, self.pitch_fix @ translation)
-        points = working_points(depth, camera.matrix)
-        if self.floor_tracker.settings.min_inliers != settings.floor_min_inliers:
-            self.floor_tracker.settings = replace(self.floor_tracker.settings,
-                                                  min_inliers=settings.floor_min_inliers)
-        if self.floor_plane is None or self.floor_frames >= settings.floor_refit_frames:
-            self.floor_plane = self.floor_tracker.update(points, prior)
-            self.floor_frames = 0
-        self.floor_frames += 1
-        plane = self.floor_plane
-        if plane is None:
-            return None, 'no floor'
-        return plane.height(points), 'floor %s %.3fm' % (plane.source, plane.camera_height_m)
 
     def payload(self, header, fresh, status):
         """Build the versioned, shared JSON schema used by polar_hist."""
@@ -351,7 +286,7 @@ class MeasuredDetector(Node):
             'frame_id': header.frame_id,
             'stamp': {'sec': header.stamp.sec, 'nanosec': header.stamp.nanosec},
             'range_min': settings.range_min, 'range_max': settings.range_max,
-            'field_of_view': None, 'detections': [], 'unknown_intervals': [],
+            'field_of_view': None, 'detections': [], 'blockers': [], 'unknown_intervals': [],
         }
 
     def unavailable(self, status):
