@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    rgb_topic: /oak/rgb/image_rect/compressed
+    rgb_transport: compressed
+    camera_info_topic: /oak/rgb/camera_info
+    rectified: true
+    scan_topic: /scan
