@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    rgb_topic: /image_raw
+    rgb_transport: raw
+    camera_info_topic: /camera_info
+    rectified: false
+    scan_topic: /scan

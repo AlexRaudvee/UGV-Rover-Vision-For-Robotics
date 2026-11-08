@@ -1,0 +1,32 @@
+/**:
+  ros__parameters:
+    rate_hz: 5.0
+    max_width: 640
+    reliable_input: true
+    stale_after_s: 0.8
+    sync_tolerance_s: 0.12
+    value_max: 70.0
+    saturation_max: 120.0
+    min_area: 100.0
+    min_width: 6
+    min_height: 8
+    min_fill: 0.30
+    width_min_m: 0.23
+    width_max_m: 0.32
+    range_min: 0.15
+    range_max: 5.0
+    min_depth_pixels: 15
+    min_lidar_points: 3
+    cluster_tolerance_m: 0.12
+    min_surface_fraction: 0.20
+    min_depth_valid_fraction: 0.04
+    max_surface_std_m: 0.18
+    width_tolerance_m: 0.015
+    range_window: 3
+    range_track_timeout_s: 0.6
+    range_jump_m: 0.20
+    # Merge pieces of one object (overlapping horizontally, <= gap px apart vertically,
+    # within merge_max_range_diff_m of each other). 0 disables merging.
+    merge_max_gap_px: 15.0
+    merge_min_overlap: 0.5
+    merge_max_range_diff_m: 0.3
