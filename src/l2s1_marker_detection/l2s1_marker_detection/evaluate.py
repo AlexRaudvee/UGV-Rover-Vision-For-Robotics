@@ -1,7 +1,7 @@
 """Offline robustness evaluation: run several detection presets over saved images.
 
 No ROS needed. Example:
-    python3 -m marker_localization.evaluate runs/marker_captures \
+    python3 -m l2s1_marker_detection.evaluate runs/marker_captures \
         --presets baseline clahe upscale tuned improved --expect APRILTAG_36h11:3 --out runs/eval
 
 Writes <out>/detections.csv (one row per image x preset), annotated images per

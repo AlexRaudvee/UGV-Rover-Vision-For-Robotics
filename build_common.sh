@@ -7,6 +7,6 @@ colcon build --cmake-args -Wno-dev --packages-select vizanti vizanti_cpp vizanti
 colcon build --packages-select apriltag --cmake-args -DBUILD_PYTHON_WRAPPER=ON -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
 source install/setup.bash
 python3 scripts/clean_perception_metadata.py install
-colcon build --packages-select object_detection obstacle_detection polar_hist detection_improved marker_localization --executor sequential
+colcon build --packages-select object_detection obstacle_detection polar_hist detection_improved l2s1_marker_detection l2s2_localisation --executor sequential
 source install/setup.bash 
 

@@ -40,6 +40,9 @@ def generate_launch_description():
         DeclareLaunchArgument('markers', default_value='true',
                               description='Run marker detection on the USB camera stream'),
         DeclareLaunchArgument('marker_preset', default_value='baseline'),
+        DeclareLaunchArgument('markers', default_value='true',
+                              description='Run marker detection on the USB camera stream'),
+        DeclareLaunchArgument('marker_preset', default_value='baseline'),
         DeclareLaunchArgument('usb_camera', default_value='true'),
         DeclareLaunchArgument('oak_camera', default_value='true'),
         DeclareLaunchArgument('vizanti', default_value='true'),
@@ -65,7 +68,7 @@ def generate_launch_description():
         # The base launch already publishes the robot model. Include camera drivers
         # individually instead of lab1_view, which would duplicate that publisher.
         include('ugv_vision', 'camera.launch.py', 'usb_camera'),
-        include('marker_localization', 'marker_detection.launch.py', 'markers',
+        include('l2s1_marker_detection', 'marker_detection.launch.py', 'markers',
                 preset=LaunchConfiguration('marker_preset')),
         include('ugv_vision', 'oak_d_lite.launch.py', 'oak_camera'),
         Node(package='ugv_vision', executable='depth_cloud', name='depth_cloud',

@@ -11,18 +11,18 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    share = get_package_share_directory('marker_localization')
+    share = get_package_share_directory('l2s2_localisation')
     config = lambda name: os.path.join(share, 'config', name)  # noqa: E731
     return LaunchDescription([
         DeclareLaunchArgument('image_topic', default_value='/image_raw'),
         DeclareLaunchArgument('preset', default_value='improved'),
         DeclareLaunchArgument('marker_size_m', default_value='0.0'),
-        Node(package='marker_localization', executable='detector', name='marker_detector',
+        Node(package='l2s1_marker_detection', executable='detector', name='marker_detector',
              output='screen',
-             parameters=[config('detector.yaml'), {
+             parameters=[os.path.join(get_package_share_directory('l2s1_marker_detection'), 'config', 'detector.yaml'), {
                  'image_topic': LaunchConfiguration('image_topic'),
                  'preset': LaunchConfiguration('preset')}]),
-        Node(package='marker_localization', executable='scanner', name='marker_scanner',
+        Node(package='l2s2_localisation', executable='scanner', name='marker_scanner',
              output='screen',
              parameters=[config('scanner.yaml'), {
                  'marker_size_m': ParameterValue(LaunchConfiguration('marker_size_m'),

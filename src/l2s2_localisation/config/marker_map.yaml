@@ -1,7 +1,7 @@
 # Field positions of the markers, measured with the Bosch laser (metres).
 # Frame (assignment Table 2 / Fig. 7): origin at the centre spot, x towards the
 # goal with the curling targets, y to the left.
-# Rebuild (colcon build --packages-select marker_localization) after editing.
+# Rebuild (colcon build --packages-select l2s2_localisation) after editing.
 field:
   half_length: 4.5
   half_width: 3.0

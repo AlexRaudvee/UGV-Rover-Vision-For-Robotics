@@ -9,7 +9,7 @@ colcon build --cmake-args -Wno-dev --packages-select vizanti vizanti_cpp vizanti
 
 colcon build --packages-select apriltag --cmake-args -DBUILD_PYTHON_WRAPPER=ON -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
 source install/setup.bash
-colcon build --packages-select marker_localization --executor sequential
+colcon build --packages-select l2s1_marker_detection l2s2_localisation --executor sequential
 
 # echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc ## already done in install_additional_ros_humble_packages.sh
 # echo ""export ROS_DOMAIN_ID=42" >> ~/.bashrc # change ROS_DOMAIN_ID to your group-number

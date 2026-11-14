@@ -7,7 +7,7 @@ Needs the marker detector running (it reads /marker_detector/detections).
 At each pan stop the scanner waits settle_s for the servo and camera, then
 collects detections for dwell_s. The result, one entry per marker relative to
 the robot (range, bearing, x, y, height), is published latched on
-~/result and saved as JSON under result_dir. Triangulation is not done here.
+~/result and saved as JSON under result_dir. The scan also runs localisation against the configured marker map.
 
 The pan-tilt has no position feedback: the commanded angle is assumed. Check
 the signs once with  ros2 service call /marker_scanner/look_left ...  : the
@@ -26,9 +26,9 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
-from . import aruco_compat as compat
-from .camera_model import CameraModel
-from .detector_node import _default_camera_info
+from l2s1_marker_detection import aruco_compat as compat
+from l2s1_marker_detection.camera_model import CameraModel
+from l2s1_marker_detection.detector_node import _default_camera_info
 from .geometry import MountModel, observe, summarize
 from .localize import load_map, localize_scan
 
@@ -36,7 +36,7 @@ from .localize import load_map, localize_scan
 def _default_marker_map():
     try:
         from ament_index_python.packages import get_package_share_directory
-        return os.path.join(get_package_share_directory('marker_localization'), 'config',
+        return os.path.join(get_package_share_directory('l2s2_localisation'), 'config',
                             'marker_map.yaml')
     except Exception:  # noqa: BLE001
         return ''

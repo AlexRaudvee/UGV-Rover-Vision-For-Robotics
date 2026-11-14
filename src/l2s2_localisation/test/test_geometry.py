@@ -7,8 +7,8 @@ import cv2
 import numpy as np
 import pytest
 
-from marker_localization.camera_model import CameraModel
-from marker_localization.geometry import (MountModel, observe, square_object_points,
+from l2s1_marker_detection.camera_model import CameraModel
+from l2s2_localisation.geometry import (MountModel, observe, square_object_points,
                                           summarize)
 
 CAMERA_INFO = (Path(__file__).resolve().parents[2]
