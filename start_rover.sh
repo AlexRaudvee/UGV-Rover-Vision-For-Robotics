@@ -17,7 +17,7 @@ Examples:
   bash start_rover.sh --build
   bash start_rover.sh
   bash start_rover.sh objects:=false obstacles:=false polar_hist:=false oak_camera:=false
-  bash start_rover.sh improved_detection:=true   # also run detection_improved
+  bash start_rover.sh improved_detection:=false objects:=true obstacles:=true polar_hist:=true
 
 Run on the robot host. Stop existing robot launches before starting a session.
 Ctrl+C stops the foreground session. The container remains running.
@@ -48,8 +48,9 @@ docker exec "${exec_options[@]}" \
         fi
         if [ "$2" != skip ]; then
             python3 scripts/clean_perception_metadata.py install
-            colcon build --executor sequential --packages-select \
-                ugv_bringup ugv_vision object_detection obstacle_detection polar_hist detection_improved \
+            MAKEFLAGS=-j1 CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --executor sequential --packages-select \
+                ldlidar rf2o_laser_odometry ugv_bringup ugv_vision object_detection obstacle_detection polar_hist \
+                detection_improved obstacle_avoidance_adv \
                 vizanti_cpp vizanti_server
         fi
         source install/setup.bash

@@ -16,6 +16,9 @@
 ******************************************************************************************** */
 
 #include "rf2o_laser_odometry/CLaserOdometry2DNode.hpp"
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
 
 using namespace rf2o;
 
@@ -29,8 +32,11 @@ CLaserOdometry2DNode::CLaserOdometry2DNode(): Node("CLaserOdometry2DNode")
   this->get_parameter("laser_scan_topic", laser_scan_topic);
   this->declare_parameter<std::string>("odom_topic", "/odom_rf2o");
   this->get_parameter("odom_topic", odom_topic);
-  this->declare_parameter<std::string>("imu_topic", "/imu/data");
-  this->get_parameter("imu_topic", imu_topic);
+  linear_velocity_stddev = declare_parameter<double>("linear_velocity_stddev", 0.05);
+  angular_velocity_stddev = declare_parameter<double>("angular_velocity_stddev", 0.05);
+  max_scan_gap = declare_parameter<double>("max_scan_gap", 0.5);
+  max_linear_speed = declare_parameter<double>("max_linear_speed", 1.5);
+  max_angular_speed = declare_parameter<double>("max_angular_speed", 3.0);
   this->declare_parameter<std::string>("base_frame_id", "base_link");
   this->get_parameter("base_frame_id", base_frame_id);
   this->declare_parameter<std::string>("odom_frame_id", "odom");
@@ -42,13 +48,17 @@ CLaserOdometry2DNode::CLaserOdometry2DNode(): Node("CLaserOdometry2DNode")
   this->declare_parameter<double>("freq", 10.0);
   this->get_parameter("freq", freq);
 
+  for (double value : {freq, linear_velocity_stddev, angular_velocity_stddev,
+                       max_scan_gap, max_linear_speed, max_angular_speed})
+    if (!std::isfinite(value) || value <= 0.0)
+      throw std::invalid_argument("RF2O rates, limits and standard deviations must be positive");
+
   // Init Publishers and Subscribers
   //---------------------------------
   buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*buffer_);
   odom_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(this);
   odom_pub  = this->create_publisher<nav_msgs::msg::Odometry>(odom_topic, 5);
-  imu_pub  = this->create_publisher<sensor_msgs::msg::Imu>(imu_topic, 5);
   laser_sub = this->create_subscription<sensor_msgs::msg::LaserScan>(laser_scan_topic,rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile(),
       std::bind(&CLaserOdometry2DNode::LaserCallBack, this, std::placeholders::_1));
   
@@ -66,7 +76,7 @@ CLaserOdometry2DNode::CLaserOdometry2DNode(): Node("CLaserOdometry2DNode")
     initial_robot_pose.pose.pose.position.x = 0;
     initial_robot_pose.pose.pose.position.y = 0;
     initial_robot_pose.pose.pose.position.z = 0;
-    initial_robot_pose.pose.pose.orientation.w = 0;
+    initial_robot_pose.pose.pose.orientation.w = 1;
     initial_robot_pose.pose.pose.orientation.x = 0;
     initial_robot_pose.pose.pose.orientation.y = 0;
     initial_robot_pose.pose.pose.orientation.z = 0;
@@ -84,28 +94,76 @@ CLaserOdometry2DNode::CLaserOdometry2DNode(): Node("CLaserOdometry2DNode")
 */
 void CLaserOdometry2DNode::LaserCallBack(const sensor_msgs::msg::LaserScan::SharedPtr new_scan)
 {
-  if (GT_pose_initialized)
-  {
-    // Keep in memory the last received laser_scan
-    last_scan = *new_scan;
-    rf2o_ref.current_scan_time = last_scan.header.stamp;
-    
-    if (rf2o_ref.first_laser_scan == false)
-    {
-      // copy laser range data to rf2o internal variable
-      for (unsigned int i = 0; i < rf2o_ref.width; i++)
-        rf2o_ref.range_wf(i) = new_scan->ranges[i];
-      // inform of new scan available
-      new_scan_available = true;
+  if (!GT_pose_initialized || new_scan->ranges.size() < 80 ||
+      !std::isfinite(new_scan->angle_min) || !std::isfinite(new_scan->angle_max) ||
+      !std::isfinite(new_scan->angle_increment) || new_scan->angle_increment == 0.0 ||
+      !(new_scan->range_max > new_scan->range_min)) return;
+
+  auto scan = *new_scan;
+  if (scan.angle_increment < 0.0) {
+    std::reverse(scan.ranges.begin(), scan.ranges.end());
+    std::swap(scan.angle_min, scan.angle_max);
+    scan.angle_increment = -scan.angle_increment;
+  }
+  unsigned int valid = 0;
+  for (auto &range : scan.ranges) {
+    if (!std::isfinite(range) || range <= scan.range_min || range >= scan.range_max)
+      range = 0.0f;
+    else ++valid;
+  }
+  if (valid < std::max<size_t>(80, scan.ranges.size() / 5)) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Too few usable LiDAR returns");
+    return;
+  }
+  const rclcpp::Time stamp(scan.header.stamp);
+  const double age = (get_clock()->now() - stamp).seconds();
+  if (age < -0.05 || age > max_scan_gap) return;
+  const double center = 0.5 * (scan.angle_min + scan.angle_max);
+  const double fov = scan.angle_max - scan.angle_min;
+  if (fov <= 0.0 || std::abs(fov - scan.angle_increment * (scan.ranges.size() - 1)) > 0.01)
+    return;
+  if (!rf2o_ref.first_laser_scan) {
+    // LD19 revolutions contain slightly different numbers of samples. Match the
+    // established angular grid instead of continually discarding scan pairs.
+    // Nearest measured rays preserve invalid sectors; large geometry changes
+    // still reinitialize below.
+    const auto count = scan.ranges.size();
+    if (count != rf2o_ref.width &&
+        std::abs(static_cast<long>(count) - static_cast<long>(rf2o_ref.width)) <= 8 &&
+        std::abs(center - scan_center) <= 1e-5 && std::abs(fov - scan_fov) <= 1e-5 &&
+        scan.header.frame_id == scan_frame) {
+      std::vector<float> resampled(rf2o_ref.width);
+      for (size_t i = 0; i < resampled.size(); ++i) {
+        const size_t source = std::lround(static_cast<double>(i) * (count - 1) /
+                                          (resampled.size() - 1));
+        resampled[i] = scan.ranges[source];
+      }
+      scan.ranges.swap(resampled);
+      scan.angle_increment = fov / (scan.ranges.size() - 1);
     }
-    else
-    {
-      // Initialize module on first scan (from laser params)
-      setLaserPoseFromTf();
-      rf2o_ref.init(last_scan, initial_robot_pose.pose.pose);
-      rf2o_ref.first_laser_scan = false;
+    const double dt = (stamp - rf2o_ref.last_odom_time).seconds();
+    if (dt <= 0.0) return;
+    if (dt > max_scan_gap || scan.ranges.size() != rf2o_ref.width ||
+        std::abs(center - scan_center) > 1e-5 || std::abs(fov - scan_fov) > 1e-5 ||
+        scan.header.frame_id != scan_frame) {
+      // Start a new scan pair at the last accepted pose after an outage/geometry change.
+      rf2o_ref.first_laser_scan = true;
+      new_scan_available = false;
     }
   }
+  last_scan = scan;
+  rf2o_ref.current_scan_time = stamp;
+  if (rf2o_ref.first_laser_scan) {
+    scan_center = center;
+    scan_fov = fov;
+    scan_frame = scan.header.frame_id;
+    if (!setLaserPoseFromTf()) return;
+    rf2o_ref.init(last_scan, initial_robot_pose.pose.pose);
+    rf2o_ref.first_laser_scan = false;
+    new_scan_available = false;
+    return;
+  }
+  new_scan_available = true;
 }
 
 
@@ -126,7 +184,7 @@ bool CLaserOdometry2DNode::setLaserPoseFromTf()
   catch (tf2::TransformException &ex)
   {
     RCLCPP_ERROR(get_logger(), "%s",ex.what());
-    retrieved = false;
+    return false;
   }
 
   // Keep this transform as Eigen Matrix3d
@@ -146,8 +204,11 @@ bool CLaserOdometry2DNode::setLaserPoseFromTf()
   laser_tf.translation()(1) = t[1];
   laser_tf.translation()(2) = t[2];
 
-  // Sets this transform in rf2o 
-  rf2o_ref.setLaserPose(laser_tf);
+  // RF2O samples angles in [-FOV/2, FOV/2]. Rotate that virtual scan frame
+  // into the actual LaserScan frame (LD19 uses [0, 2*pi]). No output sign hacks.
+  Pose3d centered_scan = Pose3d::Identity();
+  centered_scan.linear() = rf2o::matrixYaw(scan_center);
+  rf2o_ref.setLaserPose(laser_tf * centered_scan);
 
   return retrieved;
 }
@@ -167,14 +228,31 @@ void CLaserOdometry2DNode::process()
   // Do only run when a new scan is ready 
   if( rf2o_ref.is_initialized() && scan_available() )
   {
-    // Process odometry estimation
-    rf2o_ref.odometryCalculation(last_scan);
-
-    // Publish odometry over ROS2 (tf/topic)
-    publish();
-
-    // Do not run on the same data!
     new_scan_available = false;
+    const double dt = (rf2o_ref.current_scan_time - rf2o_ref.last_odom_time).seconds();
+    if (dt <= 0.0 || dt > max_scan_gap) return;
+    const Pose3d previous = rf2o_ref.getPose();
+    const bool solved = rf2o_ref.odometryCalculation(last_scan);
+    const Pose3d delta = previous.inverse() * rf2o_ref.getPose();
+    const double speed = delta.translation().head<2>().norm() / dt;
+    const double turn_rate = std::abs(rf2o::getYaw(delta.rotation())) / dt;
+    if (!solved || !rf2o_ref.getPose().matrix().allFinite() ||
+        !rf2o_ref.getIncrementCovariance().allFinite() ||
+        !std::isfinite(speed) || !std::isfinite(turn_rate) ||
+        speed > max_linear_speed || turn_rate > max_angular_speed) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Rejected invalid RF2O solution; rebasing scan pair");
+      rf2o_ref.first_laser_scan = true;
+      return;
+    }
+    // Use base-frame displacement, including lateral motion and laser lever arm.
+    rf2o_ref.lin_speed = delta.translation().x() / dt;
+    rf2o_ref.ang_speed = rf2o::getYaw(delta.rotation()) / dt;
+    publish();
+    initial_robot_pose.pose.pose.position.x = rf2o_ref.getPose().translation().x();
+    initial_robot_pose.pose.pose.position.y = rf2o_ref.getPose().translation().y();
+    tf2::Quaternion q;
+    q.setRPY(0.0, 0.0, rf2o::getYaw(rf2o_ref.getPose().rotation()));
+    initial_robot_pose.pose.pose.orientation = tf2::toMsg(q);
   }
   else
   {
@@ -183,7 +261,7 @@ void CLaserOdometry2DNode::process()
       if (!warning_issued)
       {
           RCLCPP_WARN(get_logger(), "Waiting for laser_scans....");
-          warning_issued = true; // 设置警告标志
+          warning_issued = true;
       }
   }
 }
@@ -222,26 +300,26 @@ void CLaserOdometry2DNode::publish()
   odom.header.stamp = rf2o_ref.last_odom_time;    // the time of the last scan used!
   odom.header.frame_id = odom_frame_id;
   //set the position
-  odom.pose.pose.position.x = -1.0*rf2o_ref.robot_pose_.translation()(0);
-  odom.pose.pose.position.y = -1.0*rf2o_ref.robot_pose_.translation()(1);
+  odom.pose.pose.position.x = rf2o_ref.robot_pose_.translation()(0);
+  odom.pose.pose.position.y = rf2o_ref.robot_pose_.translation()(1);
   odom.pose.pose.position.z = 0.0;
   odom.pose.pose.orientation = quaternion;
   //set the velocity
   odom.child_frame_id = base_frame_id;
   odom.twist.twist.linear.x = rf2o_ref.lin_speed;    //linear speed
-  odom.twist.twist.linear.y = 0.0;
+  odom.twist.twist.linear.y = rf2o_ref.lateral_speed;
   odom.twist.twist.angular.z = rf2o_ref.ang_speed;   //angular speed
-  //publish the message
+  for (int index : {0, 7, 14, 21, 28, 35}) {
+    odom.pose.covariance[index] = 1e6;
+    odom.twist.covariance[index] = 1e6;
+  }
+  odom.twist.covariance[0] = linear_velocity_stddev * linear_velocity_stddev;
+  odom.twist.covariance[7] = linear_velocity_stddev * linear_velocity_stddev;
+  odom.twist.covariance[35] = angular_velocity_stddev * angular_velocity_stddev;
   odom_pub->publish(odom);
   
-  sensor_msgs::msg::Imu imu;
-  
-  imu.header.stamp = rf2o_ref.last_odom_time;
-  imu.header.frame_id = odom_frame_id;
-  imu.orientation = quaternion;
-  
-  imu_pub->publish(imu);
-  
+  // Velocity uncertainty floors are provisional; not a measured accuracy claim.
+  // Pose is intentionally not fused by the EKF (it is integrated from this same source).
   // 2. publish over tf? (one one node should publish this transform!)
   if (publish_tf)
   {
@@ -250,8 +328,8 @@ void CLaserOdometry2DNode::publish()
     odom_trans.header.stamp = rf2o_ref.last_odom_time;    // the time of the last scan used!
     odom_trans.header.frame_id = odom_frame_id;
     odom_trans.child_frame_id = base_frame_id;
-    odom_trans.transform.translation.x = -1.0*rf2o_ref.robot_pose_.translation()(0);
-    odom_trans.transform.translation.y = -1.0*rf2o_ref.robot_pose_.translation()(1);
+    odom_trans.transform.translation.x = rf2o_ref.robot_pose_.translation()(0);
+    odom_trans.transform.translation.y = rf2o_ref.robot_pose_.translation()(1);
     odom_trans.transform.translation.z = 0.0;
     odom_trans.transform.rotation = quaternion;
     //send the transform

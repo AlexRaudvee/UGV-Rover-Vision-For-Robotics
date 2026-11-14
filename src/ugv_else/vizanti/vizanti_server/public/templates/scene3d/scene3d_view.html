@@ -1,0 +1,12 @@
+<section id="{uniqueID}_panel" style="position:fixed;inset:70px 0 0;z-index:15;background:#101923;color:#e6edf3;touch-action:none">
+  <canvas id="{uniqueID}_canvas" style="width:100%;height:100%;display:block;touch-action:none"></canvas>
+  <div style="position:absolute;top:12px;left:16px;right:12px;font:14px sans-serif;pointer-events:none">
+    <b>3D · odom</b> · floor grid 1 m · drag to orbit · scroll to zoom<br>
+    <span id="{uniqueID}_status">Waiting for odometry and depth…</span><br>
+    <span style="pointer-events:auto"><button id="{uniqueID}_origin">View starting point</button>
+    <button id="{uniqueID}_clear">Clear trail</button>
+    <label><input id="{uniqueID}_follow" type="checkbox">Follow rover</label>
+    <button id="{uniqueID}_close">Back to 2D</button></span>
+  </div>
+  <div style="position:absolute;bottom:12px;left:16px;font:13px sans-serif">Green axes: odometry start · blue trail: since opening · depth coloured by height · schematic rover</div>
+</section>

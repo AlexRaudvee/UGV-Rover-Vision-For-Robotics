@@ -1,0 +1,42 @@
+obstacle_avoidance_adv:
+  ros__parameters:
+    goal_distance: 5.0
+    speed: 0.3                    # Manufacturer's cruise ceiling; braking/coverage cap the actual command.
+    avoidance_speed: 0.2
+    angular_speed: 0.8
+    half_length: 0.125             # Chassis footprint, metres, including tyres.
+    half_width: 0.11
+    side_margin: 0.06
+    stop_clearance: 0.30          # Front bumper to obstacle.
+    emergency_clearance: 0.08
+    sidestep_min: 0.50
+    sidestep_max: 1.20
+    pass_distance: 1.0            # Forward after the second 90 degree turn.
+    braking_deceleration: 0.5     # Command ramp assumption, not measured physical braking.
+    linear_acceleration: 0.5
+    angular_acceleration: 1.2
+    reaction_time: 0.20           # Added to measured scan age when calculating braking distance.
+    heading_tolerance: 0.04       # Radians, about 2.3 degrees.
+    distance_tolerance: 0.035
+    settle_time: 0.25
+    minimum_coverage: 0.65
+    mission_timeout: 600.0           # Only automatic stop besides a part moving with the rover; the look-around never gives up.
+    gap_lookahead: 1.5            # Look for a gap between two obstacles once one is this close ahead.
+    gap_max_angle: 0.70           # Radians (40 degrees); furthest the gap entry may be off the route.
+    gap_max_offset: 0.80          # Furthest sideways the gap may be from the route.
+    gap_runup: 0.30               # Straight run-up in front of the gap, after lining up.
+    gap_exit: 0.50                # Drive this far beyond the obstacles before rejoining.
+    gap_side_window: 0.60         # Obstacles must lie within this distance on both sides.
+    obstacle_length: 0.50         # Longest obstacle the drive through must clear.
+    gap_margin: 0.02              # Room each side in a gap; smallest gap 2 * (half_width + gap_margin) = 0.26 m.
+    input_timeout: 1.5            # LiDAR, gyro and odometry age/receipt allowance.
+    depth_timeout: 3.0            # Optional delayed WLS detections; compensated by pose history.
+    scan_memory_s: 0.30
+    control_rate: 20.0
+    resume_clear_time: 0.2
+    scan_topic: /scan
+    odom_topic: /odom/wheels      # Run 10c: fused /odom under-reported distance by ~35% on turf; wheels matched LiDAR within ~5%.
+    imu_topic: /imu/estimation
+    detection_topic: /detection_improved/obstacle/detections
+    base_frame: base_footprint
+    command_topic: /obstacle_avoidance_adv/cmd_vel

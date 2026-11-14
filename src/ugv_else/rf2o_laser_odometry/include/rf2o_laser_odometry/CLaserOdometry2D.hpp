@@ -136,7 +136,7 @@ public:
   unsigned int iter_irls;
   float g_mask[5];
 
-  double lin_speed, ang_speed;
+  double lin_speed = 0.0, lateral_speed = 0.0, ang_speed = 0.0;
 
   //rclcpp::wall	m_runtime;
 

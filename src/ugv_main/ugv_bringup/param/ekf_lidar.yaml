@@ -1,0 +1,47 @@
+# Uncalibrated baseline: no wheel separation or wheel-derived heading is used.
+# These standard deviations are conservative starting assumptions, not calibration.
+odometry_inputs:
+  ros__parameters:
+    wheel_velocity_stddev: 0.20
+    lateral_velocity_stddev: 0.05
+    gyro_stddev: 0.03
+    max_wheel_speed: 1.5
+    input_timeout: 0.5
+    base_frame: base_footprint
+
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.3
+    two_d_mode: true
+    publish_tf: true
+    print_diagnostics: true
+    reset_on_time_jump: true
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_footprint
+    world_frame: odom
+    # Each source supplies velocity only: don't fuse its integrated pose again.
+    odom0: /odom/wheels
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true, true, false,
+                   false, false, false,
+                   false, false, false]
+    odom0_queue_size: 10
+    odom1: /odom_rf2o
+    odom1_config: [false, false, false,
+                   false, false, false,
+                   true, true, false,
+                   false, false, true,
+                   false, false, false]
+    odom1_queue_size: 5
+    odom1_twist_rejection_threshold: 4.0  # Reject scan-match velocity outliers, in standard deviations.
+    imu0: /imu/estimation
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_queue_size: 20
+    use_control: false

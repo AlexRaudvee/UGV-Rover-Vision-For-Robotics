@@ -9,6 +9,10 @@
       "id": "rosbridge_default"
     },
     {
+      "type": "scene3d",
+      "id": "rover_scene3d"
+    },
+    {
       "type": "compressedimage",
       "id": "perception_rgb"
     },
@@ -31,6 +35,14 @@
     {
       "type": "compressedimage",
       "id": "perception_lidar_hist"
+    },
+    {
+      "type": "compressedimage",
+      "id": "perception_wls_image"
+    },
+    {
+      "type": "compressedimage",
+      "id": "perception_wls_depth"
     }
   ],
   "view": {
@@ -50,7 +62,7 @@
     "rotation": "0"
   },
   "perception_depth": {
-    "topic": "/object_detection/depth/compressed",
+    "topic": "/detection_improved/object/depth/compressed",
     "opacity": "1",
     "throttle": "200",
     "width": "32",
@@ -59,7 +71,7 @@
     "rotation": "0"
   },
   "perception_depth_debug": {
-    "topic": "/object_detection/debug/compressed",
+    "topic": "/detection_improved/object/debug/compressed",
     "opacity": "1",
     "throttle": "200",
     "width": "32",
@@ -68,7 +80,7 @@
     "rotation": "0"
   },
   "perception_lidar_debug": {
-    "topic": "/obstacle_detection/debug/compressed",
+    "topic": "/detection_improved/obstacle/debug/compressed",
     "opacity": "1",
     "throttle": "200",
     "width": "32",
@@ -77,7 +89,7 @@
     "rotation": "0"
   },
   "perception_depth_hist": {
-    "topic": "/polar_hist/object/histogram/compressed",
+    "topic": "/detection_improved/polar_hist/object/histogram/compressed",
     "opacity": "1",
     "throttle": "200",
     "width": "33",
@@ -86,7 +98,7 @@
     "rotation": "0"
   },
   "perception_lidar_hist": {
-    "topic": "/polar_hist/obstacle/histogram/compressed",
+    "topic": "/detection_improved/polar_hist/obstacle/histogram/compressed",
     "opacity": "1",
     "throttle": "200",
     "width": "33",
@@ -94,13 +106,37 @@
     "img_offset_y": "68",
     "rotation": "0"
   },
-  "layout_version": "measured-perception-2",
+  "layout_version": "rover-3d-depth-5",
   "managed_widgets": [
     "perception_rgb",
     "perception_depth",
     "perception_depth_debug",
     "perception_lidar_debug",
     "perception_depth_hist",
-    "perception_lidar_hist"
-  ]
+    "perception_lidar_hist",
+    "perception_wls_image",
+    "perception_wls_depth",
+    "rover_scene3d"
+  ],
+  "perception_wls_image": {
+    "topic": "/wls_filtered/compressed",
+    "opacity": "1",
+    "throttle": "200",
+    "width": "24",
+    "img_offset_x": "25",
+    "img_offset_y": "88",
+    "rotation": "0"
+  },
+  "perception_wls_depth": {
+    "topic": "/wls_filtered/depth_preview/compressed",
+    "opacity": "1",
+    "throttle": "200",
+    "width": "24",
+    "img_offset_x": "75",
+    "img_offset_y": "88",
+    "rotation": "0"
+  },
+  "rover_scene3d": {
+    "enabled": true
+  }
 }

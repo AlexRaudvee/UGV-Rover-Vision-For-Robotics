@@ -2,6 +2,7 @@
 
 from io import BytesIO
 import math
+import struct
 import time
 
 import numpy as np
@@ -14,6 +15,28 @@ from sensor_msgs.msg import CompressedImage, Image
 
 def depth_in_meters(message, max_width=640):
     """Decode ROS depth, including byte order and padded rows, without modifying it."""
+    if hasattr(message, 'format'):
+        encoding = message.format.split(';', 1)[0].strip()
+        data = bytes(message.data)
+        if ('compressedDepth' not in message.format or 'rvl' in message.format.lower()
+                or encoding not in ('16UC1', '32FC1') or len(data) <= 12
+                or data[12:20] != b'\x89PNG\r\n\x1a\n'):
+            raise ValueError('Expected 16UC1/32FC1 compressedDepth PNG')
+        with PillowImage.open(BytesIO(data[12:])) as image:
+            pixels = np.array(image, dtype=np.float32)
+        if pixels.ndim != 2:
+            raise ValueError('Depth PNG must contain a single channel')
+        if encoding == '16UC1':
+            depth = pixels * 0.001
+        else:
+            _, a, b = struct.unpack('<iff', data[:12])
+            if not math.isfinite(a) or a <= 0 or not math.isfinite(b):
+                raise ValueError('Invalid compressedDepth quantization')
+            with np.errstate(divide='ignore', invalid='ignore'):
+                depth = a / (pixels - b)
+            depth[pixels == 0] = np.nan
+        stride = max(1, math.ceil(depth.shape[1] / max_width))
+        return depth[::stride, ::stride]
     if message.encoding == '16UC1':
         dtype = np.dtype('>u2' if message.is_bigendian else '<u2')
         scale = 0.001
@@ -57,6 +80,7 @@ class DepthPreview(Node):
             'near_m': 0.2, 'far_m': 5.0, 'rate_hz': 5.0,
             'max_width': 640, 'jpeg_quality': 75, 'stale_after_s': 1.0,
             'reliable_input': True,
+            'input_transport': 'raw',
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -67,11 +91,13 @@ class DepthPreview(Node):
         self.quality = int(get('jpeg_quality'))
         if not (0 <= self.near < self.far and 0 < rate <= 30
                 and self.max_width >= 160 and self.stale_after > 0
-                and 1 <= self.quality <= 95):
+                and 1 <= self.quality <= 95
+                and get('input_transport') in ('raw', 'compressedDepth')):
             raise ValueError('Invalid depth-preview range, rate, size, quality, or timeout')
         self.publisher = self.create_publisher(CompressedImage, get('output_topic'), 1)
         self.subscription = self.create_subscription(
-            Image, get('input_topic'), self.receive,
+            CompressedImage if get('input_transport') == 'compressedDepth' else Image,
+            get('input_topic'), self.receive,
             QoSProfile(depth=1, reliability=(ReliabilityPolicy.RELIABLE
                        if get('reliable_input') else ReliabilityPolicy.BEST_EFFORT)))
         self.latest = None
@@ -103,7 +129,7 @@ class DepthPreview(Node):
             try:
                 depth = depth_in_meters(self.latest, self.max_width)
                 colors, valid = colorize_depth(depth, self.near, self.far)
-            except (ValueError, TypeError) as error:
+            except (ValueError, TypeError, OSError) as error:
                 self.get_logger().error(str(error), throttle_duration_sec=5.0)
                 return
             picture = PillowImage.fromarray(colors)

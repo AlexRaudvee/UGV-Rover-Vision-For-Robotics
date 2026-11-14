@@ -1,4 +1,4 @@
-"""Timestamp matching with bounded buffers and a finite arrival grace period."""
+"""Select timestamp-matched or latest received frames from bounded buffers."""
 
 
 def stamp_ns(message):
@@ -6,12 +6,21 @@ def stamp_ns(message):
     return message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
 
 
-def select_pair(frames, measurements, processed, now, stale_after, tolerance):
-    """Prefer the newest RGB with a matching measurement; never estimate missing range."""
+def select_pair(frames, measurements, processed, now, stale_after, tolerance,
+                synchronize=True):
+    """Pair RGB with measured range, optionally requiring timestamp agreement."""
     pending = [entry for entry in frames
                if entry[2] > processed and now - entry[1] <= stale_after]
     if not pending:
         return None
+    if not synchronize:
+        rgb, received, sequence = pending[-1]
+        recent = [(sensor, arrival) for sensor, arrival in measurements
+                  if now - arrival <= stale_after]
+        if not recent:
+            return rgb, None, sequence, received
+        sensor, arrival = max(recent, key=lambda entry: entry[1])
+        return rgb, sensor, sequence, min(received, arrival)
     for rgb, received, sequence in reversed(pending):
         matches = [(sensor, arrival) for sensor, arrival in measurements
                    if now - arrival <= stale_after and stamp_ns(sensor) > 0

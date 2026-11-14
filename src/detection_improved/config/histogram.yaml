@@ -1,5 +1,7 @@
 /**:
   ros__parameters:
+    # Use local receipt time for freshness; keep RGB/range timestamp pairing.
+    check_acquisition_time: false
     object_topic: /detection_improved/object/detections
     obstacle_topic: /detection_improved/obstacle/detections
     bin_degrees: 2.0

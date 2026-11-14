@@ -1,5 +1,8 @@
 /**:
   ros__parameters:
+    # Use the latest received RGB/range frames without timestamp matching.
+    check_acquisition_time: false
+    synchronize_inputs: false
     rate_hz: 5.0
     max_width: 640
     reliable_input: true
@@ -13,16 +16,18 @@
     min_fill: 0.30
     width_min_m: 0.24
     width_max_m: 0.33
-    range_min: 0.15
+    range_min: 0.10
     range_max: 5.0
     min_depth_pixels: 15
     min_lidar_points: 3
     cluster_tolerance_m: 0.12
     rgb_topic: /oak/rgb/image_rect/compressed
     rgb_transport: compressed
-    camera_info_topic: /oak/rgb/camera_info
+    camera_info_topic: /wls_filtered/camera_info
     rectified: true
-    depth_topic: /oak/stereo/image_raw/compressedDepth
+    # Same OAK mounting as the recorded bag; TF currently models it as level.
+    camera_pitch_down_deg: 5.0
+    depth_topic: /wls_filtered/compressedDepth
     depth_transport: compressedDepth
     min_surface_fraction: 0.20
     min_depth_valid_fraction: 0.04

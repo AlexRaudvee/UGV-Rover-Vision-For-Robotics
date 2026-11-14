@@ -52,6 +52,7 @@ class Source:
     status: str = 'Waiting for detections'
     header: object = None
     fresh: bool = False
+    range_source: str = 'range'
 
 
 class PolarHistogramNode(Node):
@@ -65,6 +66,7 @@ class PolarHistogramNode(Node):
             'bin_degrees': 2.0, 'rate_hz': 5.0, 'stale_after_s': 0.8,
             'gap_min_width_m': 0.35, 'side_margin_m': 0.0, 'display_range_m': 3.0,
             'frame_prefix': 'detection_improved_hist', 'plot_frame_id': 'base_link',
+            'check_acquisition_time': True,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value, ParameterDescriptor(read_only=True))
@@ -91,7 +93,7 @@ class PolarHistogramNode(Node):
                 String, self.value(topic_parameter),
                 lambda message, name=key: self.receive(name, message), 1))
         self.timer = self.create_timer(1.0 / self.value('rate_hz'), self.tick)
-        self.get_logger().info('Measured histograms ready: depth and LiDAR; plot range 0-3 m')
+        self.get_logger().info('Measured histograms ready: object and obstacle streams; plot range 0-3 m')
 
     def receive(self, key, message):
         """Validate detector output and compute gaps only from fresh measured geometry."""
@@ -105,8 +107,10 @@ class PolarHistogramNode(Node):
                 raise ValueError(payload['status'])
             stamp = payload['stamp']
             acquisition_ns = stamp['sec'] * 1_000_000_000 + stamp['nanosec']
-            age = (self.get_clock().now().nanoseconds - acquisition_ns) / 1e9
-            if acquisition_ns <= 0 or not -0.15 <= age <= self.value('stale_after_s'):
+            age = ((self.get_clock().now().nanoseconds - acquisition_ns) / 1e9
+                   if self.value('check_acquisition_time') else 0)
+            if self.value('check_acquisition_time') and (
+                    acquisition_ns <= 0 or not -0.15 <= age <= self.value('stale_after_s')):
                 raise ValueError(f'Detection acquisition stale/future: age {age:+.2f}s')
             fov = payload['field_of_view']
             if (not payload['frame_id'] or len(fov) != 2 or not np.isfinite(fov).all()
@@ -160,7 +164,8 @@ class PolarHistogramNode(Node):
                 self.attach_frame(key, payload['frame_id'])
             state.frame = payload['frame_id']
             state.status = payload['status']
-            # Receipt of a delayed message cannot extend the acquisition lifetime.
+            state.range_source = payload.get('source', 'range')
+            # Strict mode includes acquisition age; live mode uses local receipt time.
             state.received = now - max(0, age)
             state.fresh = True
         except (ValueError, TypeError, KeyError, AttributeError) as error:
@@ -229,12 +234,13 @@ class PolarHistogramNode(Node):
             header = Header()
             header.frame_id = self.value('frame_prefix') + '_' + key
             header.stamp = state.header.stamp if state.header else self.get_clock().now().to_msg()
-        title = 'RGB + DEPTH' if key == 'object' else 'RGB + LIDAR'
+        title = 'RGB + ' + state.range_source.upper()
         yaw, histogram, gaps, status = 0.0, state.histogram, state.gaps, state.status
         if state.fresh:
             try:
                 transform = self.tf_buffer.lookup_transform(
-                    self.value('plot_frame_id'), state.frame, Time.from_msg(header.stamp))
+                    self.value('plot_frame_id'), state.frame,
+                    Time.from_msg(header.stamp) if self.value('check_acquisition_time') else Time())
                 rotation, _ = transform_arrays(transform.transform)
                 forward = rotation[:, 2]
                 if np.linalg.norm(forward[:2]) < 0.1:

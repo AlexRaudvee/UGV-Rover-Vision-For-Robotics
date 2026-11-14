@@ -16,6 +16,8 @@
 ******************************************************************************************** */
 
 #include "rf2o_laser_odometry/CLaserOdometry2D.hpp"
+#include <algorithm>
+#include <limits>
 
 namespace rf2o {
 
@@ -86,7 +88,9 @@ void CLaserOdometry2D::init(const sensor_msgs::msg::LaserScan& scan,
 
   // Get the initial laser pose assuming laser is fixed with respect the base_link
   laser_pose_    = robot_initial_pose * laser_pose_on_robot_;
-  laser_oldpose_ = laser_oldpose_;
+  laser_oldpose_ = laser_pose_;
+  robot_pose_ = robot_initial_pose;
+  robot_oldpose_ = robot_initial_pose;
 
 
   // Init rf2o module (internal)
@@ -162,7 +166,14 @@ void CLaserOdometry2D::init(const sensor_msgs::msg::LaserScan& scan,
 
   kai_abs_     = MatrixS31::Zero();
   kai_loc_old_ = MatrixS31::Zero();
+  kai_loc_ = MatrixS31::Zero();
+  kai_loc_level_ = MatrixS31::Zero();
+  Var = MatrixS31::Zero();
 
+  // Seed the pyramid with the first scan so the next solve compares two real scans.
+  range_wf = Eigen::Map<const Eigen::MatrixXf>(scan.ranges.data(), 1, width);
+  createImagePyramid();
+  lin_speed = lateral_speed = ang_speed = 0.0;
   module_initialized = true;
   last_odom_time = scan.header.stamp;   // the time of this first scan
 }
@@ -582,7 +593,7 @@ void CLaserOdometry2D::computeWeights()
           kdtita*(dtita(u)*dtita(u)) +
           k2d*(std::abs(dtitat) + std::abs(dtita2));
 
-      weights(u) = std::sqrt(1.f/w_der);
+      weights(u) = std::sqrt(1.f/std::max(w_der, 1e-12f));
     }
 
   const float inv_max = 1.f / weights.maxCoeff();
@@ -700,7 +711,7 @@ void CLaserOdometry2D::solveSystemNonLinear()
   //    printf("\n Aver dt = %f, aver res = %f", aver_dt, aver_res);
 
 
-  const float k = 10.f/aver_dt; //200
+  const float k = 10.f/std::max(aver_dt, 1e-6f);
   //float energy = 0.f;
   //for (unsigned int i=0; i<res.rows(); i++)
   //	energy += log(1.f + mrpt::math::square(k*res(i)));
@@ -834,6 +845,7 @@ void CLaserOdometry2D::performWarping()
 
 bool CLaserOdometry2D::filterLevelSolution()
 {
+  if (!cov_odo.allFinite() || !kai_loc_level_.allFinite()) return false;
   //		Calculate Eigenvalues and Eigenvectors
   //----------------------------------------------------------
   Eigen::SelfAdjointEigenSolver<Eigen::MatrixXf> eigensolver(cov_odo);
@@ -985,7 +997,9 @@ void CLaserOdometry2D::PoseUpdate()
   //-------------------------------------------------------------------------------------
   double time_inc_sec = (current_scan_time - last_odom_time).seconds();
   last_odom_time = current_scan_time;
-  lin_speed = acu_trans(0,2) / time_inc_sec;
+  const Pose3d base_delta = robot_oldpose_.inverse() * robot_pose_;
+  lin_speed = base_delta.translation().x() / time_inc_sec;
+  lateral_speed = base_delta.translation().y() / time_inc_sec;
   //double lin_speed = sqrt( mrpt::math::square(robot_oldpose.x()-robot_pose.x()) + mrpt::math::square(robot_oldpose.y()-robot_pose.y()) )/time_inc_sec;
 
   double ang_inc = rf2o::getYaw(robot_pose_.rotation()) -

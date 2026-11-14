@@ -6,26 +6,28 @@
       i_nn_type: none
       i_restart_on_diagnostics_error: true
     rgb:
-      i_fps: 5.0
+      i_fps: 20.0
     left:
-      i_fps: 5.0
+      i_fps: 20.0
     right:
-      i_fps: 5.0
+      i_fps: 20.0
     stereo:
       i_subpixel: true
       i_align_depth: true
       i_board_socket_id: 0
+      i_enable_speckle_filter: true
+      i_speckle_filter_speckle_range: 100
       # Built-in depth filters; do not fabricate depth in invalid dark regions.
-      i_depth_filter_size: 5
+      i_depth_filter_size: 7
       i_enable_spatial_filter: true
-      i_spatial_filter_hole_filling_radius: 0
-      i_spatial_filter_alpha: 0.5
+      i_spatial_filter_hole_filling_radius: 5
+      i_spatial_filter_alpha: 0.4
       i_spatial_filter_delta: 10
-      i_spatial_filter_iterations: 1
+      i_spatial_filter_iterations: 2
       i_enable_temporal_filter: true
       i_temporal_filter_alpha: 0.6
       i_temporal_filter_delta: 10
-      i_temporal_filter_persistency: PERSISTENCY_OFF
+      i_temporal_filter_persistency: VALID_2_IN_LAST_3
       i_enable_threshold_filter: true
-      i_threshold_filter_min_range: 150
-      i_threshold_filter_max_range: 5000
+      i_threshold_filter_min_range: 50
+      i_threshold_filter_max_range: 15000

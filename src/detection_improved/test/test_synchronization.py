@@ -39,3 +39,20 @@ def test_depth_delayed_past_arrival_grace_can_still_match_buffered_rgb():
     # The adapter must not mark RGB processed before an actual pair is available.
     delayed = select_pair(frames, [(message(10.), 20.4)], 0, 20.41, 1., .12)
     assert delayed[1] is not None and delayed[2] == 1
+
+
+def test_latest_mode_ignores_stamp_offsets_and_zero_stamps_without_waiting():
+    frames = [(message(10.), 20., 1), (message(10.2), 20.2, 2)]
+    for sensor in (message(0.), message(100.)):
+        result = select_pair(frames, [(message(10.2), 20.1), (sensor, 20.2)],
+                             0, 20.21, 1., .12, synchronize=False)
+        assert result[1] is sensor
+        assert result[2:] == (2, 20.2)
+
+
+def test_latest_mode_still_expires_stopped_streams_and_does_not_reprocess_rgb():
+    frames = [(message(10.), 20., 1)]
+    assert select_pair(frames, [], 0, 20.01, 1., .12, False)[1] is None
+    assert select_pair(frames, [(message(10.), 18.)], 0, 20.01, 1., .12, False)[1] is None
+    assert select_pair(frames, [(message(10.), 20.)], 1, 20.01, 1., .12, False) is None
+    assert select_pair(frames, [(message(10.), 21.)], 0, 21.1, 1., .12, False) is None

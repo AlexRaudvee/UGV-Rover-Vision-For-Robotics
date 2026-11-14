@@ -1,0 +1,28 @@
+wls_filter:
+  ros__parameters:
+    depth_topic: /oak/stereo/image_raw/compressedDepth
+    rgb_topic: /oak/rgb/image_rect/compressed
+    camera_info_topic: /oak/stereo/camera_info
+    rate_hz: 10.0
+    max_width: 640
+    stale_after_s: 0.8       # Time since receipt, not camera capture delay.
+    lambda: 16000.0         # Smoothing strength.
+    sigma_color: 1.5        # RGB edge sensitivity.
+    fill_holes: true        # Interpolate missing pixels; false preserves unmeasured holes.
+    ema_tau_s: 0.35         # Temporal EMA after WLS, before ALL outputs. 0 disables it.
+    ema_max_delta_m: 0.5    # Larger per-pixel changes use new depth immediately. 0 disables this gate.
+    near_m: 0.1             # Colour scale for /wls_filtered/compressed only.
+    far_m: 15.0             # Does not change metric distances.
+
+wls_depth_preview:
+  ros__parameters:
+    input_topic: /wls_filtered/compressedDepth
+    input_transport: compressedDepth
+    output_topic: /wls_filtered/depth_preview/compressed
+    reliable_input: false
+    near_m: 0.2             # Red end of the preview colour scale.
+    far_m: 15.0              # Blue end; these two settings do not clip metric depth.
+    rate_hz: 15.0
+    max_width: 640
+    stale_after_s: 1.0
+    jpeg_quality: 75

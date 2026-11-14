@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+from glob import glob
 
 '''
 Parameter Description:
@@ -22,20 +26,29 @@ Parameter Description:
 '''
 
 def generate_launch_description():
+  # USB reconnects can change ttyACM numbering. Prefer the adapter's stable ID.
+  serial_devices = sorted(glob('/dev/serial/by-id/usb-1a86_USB_Single_Serial_*-if00'))
+  default_port = serial_devices[0] if len(serial_devices) == 1 else '/dev/ttyACM0'
+  port_arg = DeclareLaunchArgument(
+      'lidar_port', default_value=default_port,
+      description='LD19 serial device; defaults to its stable USB ID when available'
+  )
   # LDROBOT LiDAR publisher node
   ldlidar_node = Node(
       package='ldlidar',
       executable='ldlidar_node',
       name='LD19',
       output='screen',
+      respawn=True,
+      respawn_delay=3.0,
       parameters=[
         {'product_name': 'LDLiDAR_LD19'},
         {'topic_name': 'scan'},
         {'frame_id': 'base_lidar_link'},
-        {'port_name': '/dev/ttyACM0'},
+        {'port_name': LaunchConfiguration('lidar_port')},
         {'port_baudrate': 230400},
         {'laser_scan_dir': True},
-        {'enable_angle_crop_func': True},
+        {'enable_angle_crop_func': ParameterValue(LaunchConfiguration('lidar_crop'), value_type=bool)},
         {'angle_crop_min': 225.0},
         {'angle_crop_max': 315.0}
       ]
@@ -53,6 +66,9 @@ def generate_launch_description():
   # Define LaunchDescription variable
   ld = LaunchDescription()
 
+  ld.add_action(port_arg)
+  ld.add_action(DeclareLaunchArgument('lidar_crop', default_value='true',
+                                    description='Mask rear sector; false needed for full-view avoidance'))
   ld.add_action(ldlidar_node)
  # ld.add_action(base_footprint_to_laser_tf_node)
 

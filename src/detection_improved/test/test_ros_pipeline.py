@@ -1,6 +1,10 @@
 """Exercise real ROS transport for both detectors, TF, plots, gaps, and stale inputs."""
 
+from copy import deepcopy
 import json
+import os
+import subprocess
+import sys
 import struct
 import time
 
@@ -18,6 +22,7 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, Image, LaserScan
 from std_msgs.msg import String
 from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
 
+from detection_improved.detector import MeasuredDetector
 from detection_improved.detector import ObjectDetector
 from detection_improved.detector import ObstacleDetector
 from detection_improved.histogram_node import PolarHistogramNode
@@ -25,19 +30,53 @@ from detection_improved.histogram_node import PolarHistogramNode
 HIST = '/detection_improved/polar_hist/'
 
 
-@pytest.mark.parametrize('depth_transport', ['raw', 'compressedDepth'])
+@pytest.mark.parametrize('depth_transport,depth_scale,obstacle_source', [
+    ('raw', 1, 'lidar'), ('compressedDepth', 1, 'lidar'),
+    ('compressedDepth', 2, 'depth'),  # WLS resolution; both dashboard branches use depth.
+])
+@pytest.mark.parametrize('check_acquisition_time', [True, False])
 def test_both_range_sources_tf_width_gaps_previews_and_independent_staleness(
-        monkeypatch, depth_transport):
-    monkeypatch.setenv('ROS_DOMAIN_ID', '177')
+        monkeypatch, depth_transport, check_acquisition_time, depth_scale, obstacle_source, request):
+    # RMW contexts and transport types must not leak between parameterized cases.
+    # Match deployment by giving each ROS graph its own process.
+    if os.environ.get("PERCEPTION_ROS_TEST_CHILD") != "1":
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--tb=short",
+             str(request.fspath) + "::" + request.node.name],
+            env=dict(os.environ, PERCEPTION_ROS_TEST_CHILD="1"),
+            capture_output=True, text=True, timeout=90)
+        assert result.returncode == 0, result.stdout + result.stderr
+        return
+    # Different cases reuse topic names with different ROS message types. Isolate
+    # DDS discovery so endpoints from a prior case cannot contaminate the next.
+    case = 0 if depth_transport == 'raw' else (2 if obstacle_source == 'depth' else 1)
+    monkeypatch.setenv('ROS_DOMAIN_ID', str(170 + case + (3 if check_acquisition_time else 0)))
     rclpy.init(args=[
         '--ros-args', '-p', 'rgb_topic:=/perception_test/rgb/compressed',
         '-p', 'depth_topic:=/perception_test/depth',
         '-p', 'depth_transport:=' + depth_transport,
+        '-p', 'check_acquisition_time:=' + str(check_acquisition_time).lower(),
+        '-p', 'synchronize_inputs:=' + str(check_acquisition_time).lower(),
         '-p', 'scan_topic:=/perception_test/scan',
         '-p', 'camera_info_topic:=/perception_test/info',
         '-p', 'stale_after_s:=0.8', '--log-level', 'error',
+        # These nodes share one Python process in the test; deployment uses
+        # separate processes. Leave CPU headroom for real JPEG/PNG transport.
+        '-p', 'rate_hz:=2.0',
     ])
-    objects, obstacles, histograms = ObjectDetector(), ObstacleDetector(), PolarHistogramNode()
+    objects = ObjectDetector()
+    obstacles = (MeasuredDetector('depth', namespace='detection_improved/obstacle')
+                 if obstacle_source == 'depth' else ObstacleDetector())
+    histograms = PolarHistogramNode()
+    rejections = {}
+    original_receive = histograms.receive
+
+    def track_receive(key, message):
+        original_receive(key, message)
+        if not histograms.sources[key].fresh:
+            rejections[key] = histograms.sources[key].status
+
+    histograms.receive = track_receive
     source = Node('synthetic_perception_sensors')
     # The deployed nodes are separate processes; allow their callbacks to progress
     # independently here as well, including JPEG rendering and reliable image I/O.
@@ -97,6 +136,9 @@ def test_both_range_sources_tf_width_gaps_previews_and_independent_staleness(
 
     def publish_scene(lidar=True, valid_depth=True, offset=0):
         stamp = source.get_clock().now().to_msg()
+        if not check_acquisition_time:
+            # Paired sensor timestamps may differ from the host clock.
+            stamp.sec -= 60
         bgr = np.full((480, 640, 3), 200, np.uint8)
         depth = np.full((480, 640), 4000, dtype='<u2')
         bounds = [(140 + offset, 230 + offset), (410 + offset, 500 + offset)]
@@ -107,9 +149,11 @@ def test_both_range_sources_tf_width_gaps_previews_and_independent_staleness(
         rgb.header.frame_id, rgb.header.stamp = info.header.frame_id, stamp
         rgb.format = 'bgr8; jpeg compressed bgr8'
         rgb.data = cv2.imencode('.jpg', bgr)[1].tobytes()
+        depth = depth[::depth_scale, ::depth_scale]
         distance = Image()
         distance.header = rgb.header
-        distance.width, distance.height, distance.step = 640, 480, 1280
+        distance.height, distance.width = depth.shape
+        distance.step = distance.width * 2
         distance.encoding, distance.data = '16UC1', depth.tobytes()
         if depth_transport == 'compressedDepth':
             distance = CompressedImage()
@@ -119,6 +163,12 @@ def test_both_range_sources_tf_width_gaps_previews_and_independent_staleness(
             distance.data = struct.pack('<iff', 0, 0., 0.) + png
         scan = LaserScan()
         scan.header.frame_id, scan.header.stamp = tf.child_frame_id, stamp
+        if not check_acquisition_time:
+            # Independent range timestamps must not block latest-frame mode.
+            distance.header = deepcopy(distance.header)
+            scan.header = deepcopy(scan.header)
+            distance.header.stamp.sec -= 10
+            scan.header.stamp.sec -= 20
         scan.angle_min, scan.angle_increment = -1.4, .002
         scan.range_min, scan.range_max = .15, 5.
         angles = scan.angle_min + np.arange(1400) * scan.angle_increment
@@ -145,21 +195,36 @@ def test_both_range_sources_tf_width_gaps_previews_and_independent_staleness(
     try:
         spin(.5)
         stream(.7)
-        assert details['object'][-1]['fresh']
-        assert not details['obstacle'][-1]['fresh']  # No camera/laser TF yet.
+        deadline = time.monotonic() + 3.0
+        while (not details['object'] or not details['object'][-1]['fresh']) and time.monotonic() < deadline:
+            stream(.1)
+        assert details['object'][-1]['fresh'], details['object'][-1]
+        if obstacle_source == 'lidar':
+            assert not details['obstacle'][-1]['fresh']  # No camera/laser TF yet.
+        else:
+            assert details['obstacle'][-1]['fresh']  # WLS depth needs no laser TF.
         tf.header.stamp = source.get_clock().now().to_msg()
         broadcaster.sendTransform([tf, camera_pose])
         spin(.3)
-        deadline = time.monotonic() + 4.0
+        deadline = time.monotonic() + 8.0
+        scene = None
         while time.monotonic() < deadline:
             stream(.1)
             outputs_fresh = all(
                 details[key] and details[key][-1]['fresh']
                 and gaps[key] and gaps[key][-1]['fresh'] for key in details)
             if len(plots) == 2 and outputs_fresh:
+                # Freeze the observed outputs before JPEG validation; executor
+                # callbacks can otherwise replace them with a later timeout.
+                scene = deepcopy((details, gaps, plots, scans))
                 break
-        for key, expected_source in [('object', 'depth'), ('obstacle', 'lidar')]:
-            payload = details[key][-1]
+        assert scene is not None, json.dumps({
+            'rejections': rejections,
+            'gaps': {key: value[-1].get('status') for key, value in gaps.items() if value},
+            'details': {key: value[-1].get('status') for key, value in details.items() if value}})
+        scene_details, scene_gaps, scene_plots, scene_scans = scene
+        for key, expected_source in [('object', 'depth'), ('obstacle', obstacle_source)]:
+            payload = scene_details[key][-1]
             assert payload['fresh'], payload
             assert len(payload['detections']) == 2, payload
             assert all(item['distance_source'] == expected_source
@@ -171,12 +236,12 @@ def test_both_range_sources_tf_width_gaps_previews_and_independent_staleness(
             else:
                 assert 'depth_ema_tau_s' not in payload
             assert all(abs(item['width_m'] - .27) < .015 for item in payload['detections'])
-            gap_payload = gaps[key][-1]
+            gap_payload = scene_gaps[key][-1]
             assert gap_payload['fresh'] and len(gap_payload['gaps']) == 1, json.dumps(gap_payload)
-            assert abs(gaps[key][-1]['gaps'][0]['width_m'] - .54) < .025
-            image = cv2.imdecode(np.frombuffer(plots[key].data, np.uint8), cv2.IMREAD_COLOR)
+            assert abs(gap_payload['gaps'][0]['width_m'] - .54) < .025
+            image = cv2.imdecode(np.frombuffer(scene_plots[key].data, np.uint8), cv2.IMREAD_COLOR)
             assert image.shape[:2] == (620, 1100)
-            assert np.isnan(scans[key].ranges).any()  # Unseen rear remains unknown.
+            assert np.isnan(scene_scans[key].ranges).any()  # Unseen rear remains unknown.
         assert depth_previews
         # Vizanti can connect after both cameras have already published frames.
         late_buffer = Buffer()
@@ -196,10 +261,19 @@ def test_both_range_sources_tf_width_gaps_previews_and_independent_staleness(
         assert details['object'][-1]['detections'][0]['bearing'] < initial
         assert not objects.set_parameters([Parameter('width_min_m', value=.4)])[0].successful
         stream(1.1, lidar=False)
-        assert details['object'][-1]['fresh']
-        assert not details['obstacle'][-1]['fresh']
-        assert not gaps['obstacle'][-1]['gaps']
-        deadline = time.monotonic() + 2.0
+        if obstacle_source == 'lidar':
+            # Wait for the subscriber to observe invalidation after the final queued
+            # scan callback; depth publication continues independently throughout.
+            deadline = time.monotonic() + 2.0
+            while (details['obstacle'][-1]['fresh'] or gaps['obstacle'][-1]['fresh']) and time.monotonic() < deadline:
+                stream(.1, lidar=False)
+            assert details['object'][-1]['fresh']
+            assert not details['obstacle'][-1]['fresh']
+            assert not gaps['obstacle'][-1]['gaps']
+        else:
+            assert details['object'][-1]['fresh'] and details['obstacle'][-1]['fresh']
+        deadline = time.monotonic() + 4.0
+        invalid_scene = None
         while time.monotonic() < deadline:
             stream(.1, valid_depth=False)
             # Also wait for polar_hist to process that message; checking its gaps right
@@ -207,11 +281,18 @@ def test_both_range_sources_tf_width_gaps_previews_and_independent_staleness(
             if (not details['object'][-1]['detections']
                     and len(details['object'][-1]['unknown_intervals']) == 2
                     and not gaps['object'][-1]['gaps']):
+                invalid_scene = deepcopy((details['object'][-1], gaps['object'][-1]))
                 break
-        assert not details['object'][-1]['detections']
-        assert len(details['object'][-1]['unknown_intervals']) == 2
-        assert not gaps['object'][-1]['gaps']
-        spin(1.1)
+        assert invalid_scene is not None, details['object'][-1]
+        assert not invalid_scene[0]['detections']
+        assert len(invalid_scene[0]['unknown_intervals']) == 2
+        assert not invalid_scene[1]['gaps']
+        # Receipt-time freshness starts when queued input is processed, and the
+        # histogram invalidation arrives after detector invalidation. Await the
+        # actual downstream result instead of assuming a fixed callback delay.
+        deadline = time.monotonic() + 3.0
+        while any(gaps[key][-1]['fresh'] for key in gaps) and time.monotonic() < deadline:
+            spin(.05)
         for key in details:
             assert not gaps[key][-1]['fresh']
             assert not gaps[key][-1]['gaps']

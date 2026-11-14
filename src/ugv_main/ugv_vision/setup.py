@@ -24,7 +24,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'depth_cloud = ugv_vision.depth_cloud:main',
             'depth_preview = ugv_vision.depth_preview:main',
+            'wls_depth = ugv_vision.wls_depth:main',
             'usb_camera_supervisor = ugv_vision.usb_camera_supervisor:main',
             'color_track = ugv_vision.color_track:main',
             'kcf_track = ugv_vision.kcf_track:main',

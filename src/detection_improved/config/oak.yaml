@@ -4,4 +4,6 @@
     rgb_transport: compressed
     camera_info_topic: /oak/rgb/camera_info
     rectified: true
+    # Same OAK mounting as the recorded bag; TF currently models it as level.
+    camera_pitch_down_deg: 5.0
     scan_topic: /scan

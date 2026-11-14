@@ -3,7 +3,7 @@ from launch_ros.substitutions import FindPackageShare
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -14,6 +14,14 @@ from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
+    odometry_arg = DeclareLaunchArgument(
+        'odometry', default_value='legacy', choices=['legacy', 'lidar'])
+    lidar_odometry = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(os.path.join(
+            get_package_share_directory('ugv_bringup'), 'launch', 'odometry_lidar.launch.py')),
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('odometry'), "' == 'lidar'"]))
+    )
+    lidar_crop_arg = DeclareLaunchArgument('lidar_crop', default_value='true')
     # Declare launch arguments   
     pub_odom_tf_arg = DeclareLaunchArgument('pub_odom_tf', default_value='true',
                                             description='Whether to publish the tf from the original odom to the base_footprint')                                         
@@ -67,7 +75,8 @@ def generate_launch_description():
     # Include laser lidar launch file
     laser_bringup_launch = IncludeLaunchDescription(PythonLaunchDescriptionSource(
         [os.path.join(get_package_share_directory('ldlidar'), 'launch'),
-         '/ldlidar.launch.py'])
+         '/ldlidar.launch.py']),
+        launch_arguments={'lidar_crop': LaunchConfiguration('lidar_crop')}.items()
     )
     # Define the base node with parameters    
     driver_node = Node(
@@ -78,11 +87,15 @@ def generate_launch_description():
     base_node = Node(
         package='ugv_base_node',
         executable='base_node',
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('odometry'), "' == 'legacy'"])),
         parameters=[{'pub_odom_tf': LaunchConfiguration('pub_odom_tf')}]
     )
     
 
     return LaunchDescription([
+        odometry_arg,
+        lidar_crop_arg,
+        lidar_odometry,
         pub_odom_tf_arg,
         use_rviz_arg,
         rviz_config_arg,        

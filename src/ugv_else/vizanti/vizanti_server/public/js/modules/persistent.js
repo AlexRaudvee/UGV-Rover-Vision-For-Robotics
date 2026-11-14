@@ -29,6 +29,8 @@ export class Settings {
 			this.navbar = this.navbar || [];
 			for (const id of defaults.managed_widgets || []) {
 				if (!this[id]) this[id] = { ...defaults[id] };
+				// Follow the active detector stack while retaining widget placement.
+				this[id].topic = defaults[id].topic;
 				if (!this.navbar.some(widget => widget.id === id)) {
 					const widget = defaults.navbar.find(widget => widget.id === id);
 					if (widget) this.navbar.push({ ...widget });

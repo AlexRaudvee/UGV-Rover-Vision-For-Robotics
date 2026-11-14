@@ -68,9 +68,9 @@ def pitch_correction(pitch_down_deg):
 class MeasuredDetector(Node):
     """Share segmentation and publishing while keeping range sources independent."""
 
-    def __init__(self, mode='depth'):
+    def __init__(self, mode='depth', namespace=None):
         self.mode = mode
-        namespace = 'detection_improved/' + ('object' if mode == 'depth' else 'obstacle')
+        namespace = namespace or 'detection_improved/' + ('object' if mode == 'depth' else 'obstacle')
         super().__init__('detector', namespace=namespace)
         # Avoid competing OpenCV pools on the rover's limited CPU cores.
         cv2.setNumThreads(1)
@@ -78,10 +78,12 @@ class MeasuredDetector(Node):
             'rgb_topic': '/oak/rgb/image_rect/compressed',
             'rgb_transport': 'compressed',
             'camera_info_topic': '/oak/rgb/camera_info',
-            'depth_topic': '/oak/stereo/image_raw/compressedDepth',
+            'depth_topic': '/wls_filtered/compressedDepth',
             'depth_transport': 'compressedDepth',
             'scan_topic': '/scan', 'rectified': True, 'rate_hz': 5.0, 'max_width': 640,
             'reliable_input': True,
+            'check_acquisition_time': True,
+            'synchronize_inputs': True,
             # Camera pitch (down positive) missing from TF; applied to the LiDAR
             # projection and to the floor prior (ground check).
             'camera_pitch_down_deg': 0.0,
@@ -181,19 +183,22 @@ class MeasuredDetector(Node):
 
     def check_stamp(self, message):
         """Reject old acquisitions even when their callbacks arrived recently."""
+        if not self.value('check_acquisition_time'):
+            return
         age = (self.get_clock().now().nanoseconds - stamp_ns(message)) / 1e9
         if stamp_ns(message) <= 0 or not -self.value('sync_tolerance_s') <= age <= self.value(
                 'stale_after_s'):
             raise ValueError('Input acquisition timestamp is zero, stale, or in the future')
 
     def tick(self):
-        """Process a synchronized pair or invalidate old output."""
+        """Process selected RGB/range frames or invalidate old output."""
         now = time.monotonic()
         selected = select_pair(self.frames, self.measurements, self.processed, now,
-                               self.value('stale_after_s'), self.value('sync_tolerance_s'))
+                               self.value('stale_after_s'), self.value('sync_tolerance_s'),
+                               synchronize=self.value('synchronize_inputs'))
         if selected is None:
             if now - self.last_good_received > self.value('stale_after_s'):
-                self.unavailable('Waiting for fresh synchronized RGB + ' + self.mode)
+                self.unavailable('Waiting for fresh RGB + ' + self.mode)
             return
         rgb, sensor, sequence, received = selected
         # A delayed depth packet can still match an earlier buffered RGB frame.
@@ -225,15 +230,20 @@ class MeasuredDetector(Node):
             blobs, _ = find_black_blobs(bgr, camera, settings, keep_small=grounded)
             blob_count = sum(not blob.small for blob in blobs)
             if sensor is None:
-                raise ValueError('No synchronized ' + self.mode + '; physical width is unknown')
+                reason = ('No synchronized ' if self.value('synchronize_inputs')
+                          else 'No recently received ')
+                raise ValueError(reason + self.mode + '; physical width is unknown')
             self.check_stamp(sensor)
             if self.mode == 'depth':
                 if sensor.header.frame_id != rgb.header.frame_id:
                     raise ValueError('Depth must be registered to the RGB optical frame')
                 depth = decode_depth(sensor, self.bridge,
                                      self.value('depth_transport') == 'compressedDepth')
-                if depth.shape != original_shape:
-                    raise ValueError('Aligned depth and RGB resolutions differ')
+                # Registered WLS depth may be a subsampled version of the RGB image.
+                # Permit matching aspect ratios; keep rejecting cropped/misaligned data.
+                if abs(depth.shape[1] * original_shape[0] / original_shape[1]
+                       - depth.shape[0]) > 1.0:
+                    raise ValueError('Aligned depth and RGB aspect ratios differ')
                 depth = cv2.resize(depth, (camera.width, camera.height),
                                    interpolation=cv2.INTER_NEAREST)
                 if settings.ground_check:
@@ -255,7 +265,8 @@ class MeasuredDetector(Node):
                     raise ValueError('LiDAR scan has no frame')
                 transform = self.tf_buffer.lookup_transform(
                     rgb.header.frame_id, sensor.header.frame_id,
-                    Time.from_msg(sensor.header.stamp))
+                    Time.from_msg(sensor.header.stamp)
+                    if self.value('check_acquisition_time') else Time())
                 rotation, translation = transform_arrays(transform.transform)
                 rotation, translation = self.pitch_fix @ rotation, self.pitch_fix @ translation
                 points = scan_points_in_camera(sensor, rotation, translation)
@@ -266,7 +277,9 @@ class MeasuredDetector(Node):
                 self.range_frame = rgb.header.frame_id
             if not grounded:
                 objects, rejected, unmeasured_blobs, floor_note = None, [], [], ''
-            estimates = self.range_filter.update(candidates, estimates, stamp_ns(rgb) / 1e9,
+            range_time = (stamp_ns(rgb) / 1e9 if self.value('check_acquisition_time')
+                          else received)
+            estimates = self.range_filter.update(candidates, estimates, range_time,
                                                  settings)
             measured = []
             for index, (blob, estimate) in enumerate(zip(candidates, estimates)):
@@ -283,8 +296,9 @@ class MeasuredDetector(Node):
                 measured.append(item)
             unknown = [blob.interval() for blob in unmeasured_blobs]
             measured = merge_detections(measured, settings)   # pieces of one object
-            acquisition_age = max(0, self.get_clock().now().nanoseconds
-                                  - min(stamp_ns(rgb), stamp_ns(sensor))) / 1e9
+            acquisition_age = (max(0, self.get_clock().now().nanoseconds
+                                   - min(stamp_ns(rgb), stamp_ns(sensor))) / 1e9
+                               if self.value('check_acquisition_time') else 0)
             self.last_good_received = min(received, time.monotonic() - acquisition_age)
             target_count = sum(item.accepted for item in measured)
             clipped_count = sum(item.clipped for item in measured)

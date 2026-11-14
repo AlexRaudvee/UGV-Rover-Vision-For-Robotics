@@ -8,23 +8,23 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32, Float32MultiArray
 import subprocess
 import time
+import math
 import os
 
-def is_jetson():
-    result = any("ugv_jetson" in root for root, dirs, files in os.walk("/"))
-    return result
-
-if is_jetson():
-    serial_port = '/dev/ttyTHS1'
-else:
-    serial_port = '/dev/ttyAMA0'
-
-# Initialize serial communication with the UGV
-ser = serial.Serial(serial_port, 115200, timeout=1)
+serial_port = os.environ.get('UGV_SERIAL_PORT', '/dev/ttyTHS1' if os.path.exists('/dev/ttyTHS1') else '/dev/ttyAMA0')
 
 class UgvDriver(Node):
-    def __init__(self, name):
+    def __init__(self, name='ugv_driver', serial_connection=None):
         super().__init__(name)
+        self.declare_parameter('command_timeout', 0.5)
+        self.command_timeout = self.get_parameter('command_timeout').value
+        if not math.isfinite(self.command_timeout) or self.command_timeout <= 0:
+            raise ValueError('command_timeout must be finite and positive')
+        self.ser = serial_connection if serial_connection is not None else serial.Serial(
+            serial_port, 115200, timeout=1, write_timeout=.2)
+        self.last_command, self.motion_active = None, False
+        self.last_voltage_alarm = -math.inf
+        self.create_timer(.05, self.check_command_timeout)
 
         # Subscribe to velocity commands (cmd_vel topic)
         self.cmd_vel_sub_ = self.create_subscription(Twist, "cmd_vel", self.cmd_vel_callback, 10)
@@ -43,16 +43,23 @@ class UgvDriver(Node):
         linear_velocity = msg.linear.x
         angular_velocity = msg.angular.z
 
-        # Apply minimum threshold to angular velocity if linear velocity is zero
-        if linear_velocity == 0:
-            if 0 < angular_velocity < 0.2:
-                angular_velocity = 0.2
-            elif -0.2 < angular_velocity < 0:
-                angular_velocity = -0.2
-
+        if not math.isfinite(linear_velocity) or not math.isfinite(angular_velocity):
+            self.stop_motion()
+            return
         # Send the velocity data to the UGV as a JSON string
         data = json.dumps({'T': '13', 'X': linear_velocity, 'Z': angular_velocity}) + "\n"
-        ser.write(data.encode())
+        self.ser.write(data.encode())
+        self.last_command = time.monotonic()
+        self.motion_active = linear_velocity != 0 or angular_velocity != 0
+
+    def stop_motion(self):
+        self.ser.write((json.dumps({'T': '13', 'X': 0.0, 'Z': 0.0}) + '\n').encode())
+        self.motion_active = False
+
+    def check_command_timeout(self):
+        if self.motion_active and time.monotonic() - self.last_command > self.command_timeout:
+            self.stop_motion()
+            self.get_logger().warning('Velocity command timed out; stopped motors')
 
     # Callback for processing joint state updates
     def joint_states_callback(self, msg):
@@ -83,7 +90,7 @@ class UgvDriver(Node):
             "SY": 600,
         }) + "\n"
                 
-        ser.write(joint_data.encode())
+        self.ser.write(joint_data.encode())
 
     # Callback for processing LED control commands
     def led_ctrl_callback(self, msg):
@@ -97,16 +104,20 @@ class UgvDriver(Node):
             "IO5": IO5,
         }) + "\n"
                 
-        ser.write(led_ctrl_data.encode())
+        self.ser.write(led_ctrl_data.encode())
 
     # Callback for processing voltage data
     def voltage_callback(self, msg):
         voltage_value = msg.data
 
         # If voltage drops below a threshold, play a low battery warning sound
-        if 0.1 < voltage_value < 9: 
-            subprocess.run(['aplay', '-D', 'plughw:3,0', '~/ugv_ws/src/ugv_main/ugv_bringup/ugv_bringup/low_battery.wav'])
-            time.sleep(5)
+        if 0.1 < voltage_value < 9 and time.monotonic() - self.last_voltage_alarm > 5:
+            self.last_voltage_alarm = time.monotonic()
+            # Keep this callback nonblocking so the command watchdog can run.
+            try:
+                subprocess.Popen(['aplay', '-D', 'plughw:3,0', os.path.expanduser('~/ugv_ws/src/ugv_main/ugv_bringup/ugv_bringup/low_battery.wav')])
+            except OSError as error:
+                self.get_logger().warning(f'Battery sound unavailable: {error}')
 
 def main(args=None):
     rclpy.init(args=args)
@@ -117,9 +128,12 @@ def main(args=None):
     except KeyboardInterrupt:
         pass  # Graceful shutdown on user interrupt
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
-        ser.close()  # Close the serial connection
+        try:
+            node.stop_motion()
+        finally:
+            node.ser.close()
+            node.destroy_node()
+            rclpy.try_shutdown()  # Close the serial connection
 
 if __name__ == '__main__':
     main()

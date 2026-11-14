@@ -114,15 +114,21 @@ int main(int argc, char **argv) {
 
   ldlidar::Points2D laser_scan_points;
   double lidar_scan_freq;
+  unsigned int consecutive_timeouts = 0;
+  bool restart_required = false;
   RCLCPP_INFO(node->get_logger(), "Publish topic message:ldlidar scan data.");
-  while (rclcpp::ok()) {
+  while (rclcpp::ok() && !restart_required) {
     switch (ldlidarnode->GetLaserScanData(laser_scan_points, 1500)){
       case ldlidar::LidarStatus::NORMAL: 
+        consecutive_timeouts = 0;
         ldlidarnode->GetLidarScanFreq(lidar_scan_freq);
         ToLaserscanMessagePublish(laser_scan_points, lidar_scan_freq, setting, node, publisher);
         break;
       case ldlidar::LidarStatus::DATA_TIME_OUT:
-        RCLCPP_ERROR(node->get_logger(), "get ldlidar data is time out, please check your lidar device.");
+        if (++consecutive_timeouts >= 5) {
+          RCLCPP_ERROR(node->get_logger(), "LiDAR stream lost; closing serial port so launch can reconnect using the stable USB ID");
+          restart_required = true;
+        }
         break;
       case ldlidar::LidarStatus::DATA_WAIT:
         break;
@@ -137,11 +143,10 @@ int main(int argc, char **argv) {
 
   delete ldlidarnode;
   ldlidarnode = nullptr;
-
   RCLCPP_INFO(node->get_logger(), "ldlidar_published is end");
   rclcpp::shutdown();
 
-  return 0;
+  return restart_required ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
 void  ToLaserscanMessagePublish(ldlidar::Points2D& src,  double lidar_spin_freq, LaserScanSetting& setting,

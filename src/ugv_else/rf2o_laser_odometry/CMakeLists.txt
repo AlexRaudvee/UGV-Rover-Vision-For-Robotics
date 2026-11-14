@@ -31,8 +31,7 @@ set(EXECUTABLE_NAME "rf2o_laser_odometry_node")
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
 add_executable(${EXECUTABLE_NAME} 
-    src/CLaserOdometry2DNode.cpp
-    src/CLaserOdometry2D.cpp)
+    src/CLaserOdometry2DNode.cpp)
 
 include_directories(
   include include/
@@ -59,10 +58,11 @@ set(DEPENDENCIES
 ament_target_dependencies(${EXECUTABLE_NAME} ${DEPENDENCIES})
 
 ## Declare a cpp library
-add_library(${PROJECT_NAME} src/CLaserOdometry2D.cpp)
+add_library(${PROJECT_NAME} STATIC src/CLaserOdometry2D.cpp)
 
 ## Declare a cpp executable
 ament_target_dependencies(${PROJECT_NAME} ${DEPENDENCIES})
+target_link_libraries(${EXECUTABLE_NAME} ${PROJECT_NAME})
 
 install(TARGETS ${EXECUTABLE_NAME}
   DESTINATION lib/${PROJECT_NAME})

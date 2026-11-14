@@ -4,3 +4,9 @@ install/
 log/*.tar
 *.mcap
 VAR_*.pdf
+log/*
+
+__pycache__
+# Local run output and backups
+/runs/
+*.orig

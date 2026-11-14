@@ -1,0 +1,12 @@
+depth_cloud:
+  ros__parameters:
+    depth_topic: /wls_filtered/compressedDepth
+    camera_info_topic: /wls_filtered/camera_info
+    output_topic: /vizanti/depth/points
+    input_transport: compressedDepth
+    fixed_frame: odom
+    rate: 5.0
+    max_points: 5000
+    min_depth: 0.15         # Metres; affects only which points the 3D view displays.
+    max_depth: 15.0
+    max_image_age: 3.0      # Accept camera/filter delay; transform at capture time.
