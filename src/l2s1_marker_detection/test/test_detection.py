@@ -7,11 +7,11 @@ import cv2
 import numpy as np
 import pytest
 
-from marker_localization import aruco_compat as compat
-from marker_localization.camera_model import CameraModel
-from marker_localization.detection import (DEFAULT_FAMILIES, PRESETS, Detection, MarkerDetector,
+from l2s1_marker_detection import aruco_compat as compat
+from l2s1_marker_detection.camera_model import CameraModel
+from l2s1_marker_detection.detection import (DEFAULT_FAMILIES, PRESETS, Detection, MarkerDetector,
                                            draw, merge_duplicates)
-from marker_localization.evaluate import main as evaluate_main
+from l2s1_marker_detection.evaluate import main as evaluate_main
 
 CAMERA_INFO = (Path(__file__).resolve().parents[2]
                / 'ugv_main' / 'ugv_vision' / 'config' / 'camera_info.yaml')

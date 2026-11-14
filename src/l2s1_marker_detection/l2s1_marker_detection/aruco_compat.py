@@ -19,8 +19,10 @@ def _aruco():
 
 def normalize_family(name):
     """Map 'tag36h11', 'apriltag_36H11', '6x6_250' to OpenCV's spelling."""
-    aruco = _aruco()
     text = name.strip()
+    if text.lower() in ('tagstandard41h12', 'apriltag_standard41h12'):
+        return 'APRILTAG_standard41h12'
+    aruco = _aruco()
     if hasattr(aruco, 'DICT_' + text):
         return text
     if text.lower().startswith('tag'):

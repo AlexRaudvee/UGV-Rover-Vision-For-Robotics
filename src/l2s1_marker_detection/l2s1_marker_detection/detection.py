@@ -139,8 +139,14 @@ class MarkerDetector:
         self.config = replace(config, families=families)
         self.camera = camera
         parameters = detector_parameters(config.tuned)
-        self._detectors = [(family, compat.make_detector(compat.dictionary(family), parameters))
-                           for family in families]
+        self._detectors = []
+        for family in families:
+            if family == 'APRILTAG_standard41h12':
+                from .native_apriltag import make_detector
+                detect = make_detector()
+            else:
+                detect = compat.make_detector(compat.dictionary(family), parameters)
+            self._detectors.append((family, detect))
 
     @property
     def name(self):

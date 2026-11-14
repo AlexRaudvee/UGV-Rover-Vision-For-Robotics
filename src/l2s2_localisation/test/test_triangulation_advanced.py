@@ -5,8 +5,8 @@ import math
 import numpy as np
 import pytest
 
-from marker_localization.triangulation import Landmark, localize, wrap
-from marker_localization.triangulation_advanced import (NoiseModel, build_system,
+from l2s2_localisation.triangulation import Landmark, localize, wrap
+from l2s2_localisation.triangulation_advanced import (NoiseModel, build_system,
                                                         localize_advanced, predict)
 
 SKETCH = [(0.0, 3.9), (0.0, -3.9), (-5.4, 0.0)]       # layout of the hand sketch

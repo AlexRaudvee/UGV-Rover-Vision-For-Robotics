@@ -7,6 +7,10 @@ colcon build --cmake-args -Wno-dev --packages-select ugv_base_node ugv_interface
 chmod +x ~/ugv_ws/src/ugv_else/vizanti/vizanti_server/scripts/*.py
 colcon build --cmake-args -Wno-dev --packages-select vizanti vizanti_cpp vizanti_demos vizanti_msgs vizanti_server --executor sequential
 
+colcon build --packages-select apriltag --cmake-args -DBUILD_PYTHON_WRAPPER=ON -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
+source install/setup.bash
+colcon build --packages-select l2s1_marker_detection l2s2_localisation --executor sequential
+
 # echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc ## already done in install_additional_ros_humble_packages.sh
 # echo ""export ROS_DOMAIN_ID=42" >> ~/.bashrc # change ROS_DOMAIN_ID to your group-number
 echo "source ~/ugv_ws/install/setup.bash" >> ~/.bashrc

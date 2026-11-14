@@ -1,7 +1,7 @@
 """Marker map + triangulation for pan-tilt scan results (no ROS imports).
 
 Offline:
-    python3 -m marker_localization.localize runs/marker_scans/scan_*.json \
+    python3 -m l2s2_localisation.localize runs/marker_scans/scan_*.json \
         --map config/marker_map.yaml [--no-refine] [--no-bearings]
 """
 
@@ -10,7 +10,7 @@ import json
 import math
 import sys
 
-from . import aruco_compat as compat
+from l2s1_marker_detection import aruco_compat as compat
 from .triangulation import Field, Landmark, localize
 from .triangulation_advanced import localize_advanced, NoiseModel
 

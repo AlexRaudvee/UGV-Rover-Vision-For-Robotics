@@ -5,8 +5,8 @@ import math
 import numpy as np
 import pytest
 
-from marker_localization.localize import landmarks_from_scan, load_map, localize_scan
-from marker_localization.triangulation import (Field, Landmark, circle_intersections,
+from l2s2_localisation.localize import landmarks_from_scan, load_map, localize_scan
+from l2s2_localisation.triangulation import (Field, Landmark, circle_intersections,
                                                localize, radical_line)
 
 
