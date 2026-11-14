@@ -6,6 +6,7 @@
   <description>Lab 2: AprilTag/ArUco marker detection and localization for the UGV Rover.</description>
   <maintainer email="jetson@todo.todo">jetson</maintainer>
   <license>Apache-2.0</license>
+  <exec_depend>apriltag</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>

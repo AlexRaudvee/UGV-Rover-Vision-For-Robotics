@@ -47,10 +47,12 @@ docker exec "${exec_options[@]}" \
             source install/setup.bash
         fi
         if [ "$2" != skip ]; then
+            colcon build --packages-select apriltag --cmake-args -DBUILD_PYTHON_WRAPPER=ON -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
+            source install/setup.bash
             python3 scripts/clean_perception_metadata.py install
             MAKEFLAGS=-j1 CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --executor sequential --packages-select \
                 ldlidar rf2o_laser_odometry ugv_bringup ugv_vision object_detection obstacle_detection polar_hist \
-                detection_improved obstacle_avoidance_adv \
+                detection_improved obstacle_avoidance_adv marker_localization \
                 vizanti_cpp vizanti_server
         fi
         source install/setup.bash

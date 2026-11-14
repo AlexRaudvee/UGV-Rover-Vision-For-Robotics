@@ -6,9 +6,10 @@
     # baseline | clahe | sharpen | upscale | tuned | undistort | improved
     # Change while running: ros2 param set /marker_detector preset baseline
     preset: improved
-    # Marker categories to detect (OpenCV dictionary names without DICT_).
+    # Lab markers use the native AprilTag tagStandard41h12 family.
+    # OpenCV dictionary families remain supported as additional entries.
     # Keep only the families used in the lab: each one is an extra detector pass.
-    families: [APRILTAG_36h11, APRILTAG_25h9, 4X4_50, 5X5_100, 6X6_250]
+    families: [APRILTAG_standard41h12]
     max_rate: 10.0
     capture_dir: /home/ws/ugv_ws/runs/marker_captures
     # Set before each capture, e.g. d1.0m_a30deg

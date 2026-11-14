@@ -16,7 +16,10 @@ robustness, and comparing preprocessing improvements.
 | `test/test_detection.py` | Synthetic-marker tests (`pytest test`) | no |
 
 Pipeline (assignment Fig. 1b): image -> preprocessing -> detect marker + category.
-The category is the OpenCV dictionary (`APRILTAG_36h11`, `6X6_250`, ...). All
+The category is the marker family (`APRILTAG_standard41h12`, `APRILTAG_36h11`,
+`6X6_250`, ...). The lab markers are `tagStandard41h12`, handled by the bundled
+native AprilTag library through `native_apriltag.py`; this family is unavailable
+in the rover OpenCV dictionaries. `config/detector.yaml` selects it by default. All
 corners are reported in the original image's pixels, whatever preprocessing was used.
 
 ## Presets
@@ -39,13 +42,19 @@ plus smaller (12-14 px), more blurred (sigma 4) and lower-contrast ones, at abou
 ## On the rover
 
 The rover session must already be running (`bash start_rover.sh`), because the
-USB camera publishes `/image_raw`. `start_rover.sh` does not build this package,
-so build it once in the container:
+USB camera publishes `/image_raw`. `start_rover.sh --build` builds this package and starts the detector with
+`marker_preset:=baseline`. Vizanti includes the annotated marker feed; refresh
+the browser after rebuilding. Use `markers:=false` to disable the detector or
+`marker_preset:=improved` to select the improved pipeline.
+
+To build and launch the detector separately in the container:
 
 ```bash
 docker exec -it -e ROS_DOMAIN_ID=4 ugv_jetson_ros_humble bash
 source /opt/ros/humble/setup.bash
 cd /home/ws/ugv_ws
+colcon build --packages-select apriltag --cmake-args -DBUILD_PYTHON_WRAPPER=ON -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
+source install/setup.bash
 colcon build --packages-select marker_localization
 source install/setup.bash
 ros2 launch marker_localization marker_detection.launch.py            # preset:=baseline etc.
@@ -122,7 +131,7 @@ python -m marker_localization.localize ... --no-bearings   # shows the mirror am
 ```bash
 cd src/marker_localization
 python -m marker_localization.evaluate ../../runs/marker_captures \
-    --expect APRILTAG_36h11:3 --out ../../runs/marker_eval
+    --families tagStandard41h12 --expect tagStandard41h12:1 --out ../../runs/marker_eval
 pytest test
 ```
 
@@ -130,3 +139,17 @@ pytest test
 The output is `detections.csv` (image x preset) and annotated images per preset.
 For three distances x three angles, label captures like `d1.0m_a30deg` so the CSV
 can be grouped into a table.
+
+## Lab marker regression and size convention
+
+`test/data/lab_standard41h12.png` is the captured lab failure image. With the
+native binding built and on the sourced colcon prefix (or PYTHONPATH), tests
+verify that baseline, improved and upscale detect IDs 1 and 2. These integration
+tests skip explicitly when the native binding is unavailable.
+
+The native detector returns the **inner border square** for tagStandard41h12,
+not the full outer pattern. For later solvePnP ranging, `marker_size_m` must
+measure that returned square (the 5-module border span, rather than the full
+9-module pattern). An outer-pattern size would overestimate distance.
+OpenCV `tuned` settings affect only OpenCV families; native AprilTag uses edge
+refinement and no image decimation. The preprocessing presets still apply.

@@ -43,6 +43,10 @@
     {
       "type": "compressedimage",
       "id": "perception_wls_depth"
+    },
+    {
+      "type": "compressedimage",
+      "id": "marker_detection"
     }
   ],
   "view": {
@@ -106,7 +110,7 @@
     "img_offset_y": "68",
     "rotation": "0"
   },
-  "layout_version": "rover-3d-depth-5",
+  "layout_version": "rover-markers-6",
   "managed_widgets": [
     "perception_rgb",
     "perception_depth",
@@ -116,7 +120,8 @@
     "perception_lidar_hist",
     "perception_wls_image",
     "perception_wls_depth",
-    "rover_scene3d"
+    "rover_scene3d",
+    "marker_detection"
   ],
   "perception_wls_image": {
     "topic": "/wls_filtered/compressed",
@@ -138,5 +143,14 @@
   },
   "rover_scene3d": {
     "enabled": true
+  },
+  "marker_detection": {
+    "topic": "/marker_detector/annotated/compressed",
+    "opacity": "1",
+    "throttle": "200",
+    "width": "32",
+    "img_offset_x": "49",
+    "img_offset_y": "45",
+    "rotation": "0"
   }
 }
