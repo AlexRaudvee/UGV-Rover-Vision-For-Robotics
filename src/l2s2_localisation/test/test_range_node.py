@@ -163,3 +163,28 @@ def test_unconfigured_tag_does_not_inherit_assumed_size_or_map_location(pipeline
     node.on_detections(String(data=json.dumps(data)))
     assert not node.records
     assert 'not in the configured marker map' in node.rejections['APRILTAG_standard41h12:0']
+
+
+def test_detected_but_rejected_tag_has_an_explicit_reason(pipeline):
+    node, _client, executor, results, _config = pipeline
+    data = image_data(node)
+    data['detections'][0]['hamming'] = 2
+    node.on_detections(String(data=json.dumps(data)))
+    spin_until(executor, lambda: results and any(m.get('detected') for m in results[-1]['markers']))
+    marker = next(m for m in results[-1]['markers'] if m['id'] == 2)
+    assert marker['detected'] and not marker['fresh']
+    assert 'corrected-bit' in marker['rejection_reason']
+    assert results[-1]['stream_fresh']
+
+
+def test_recently_delivered_stale_image_is_not_a_dead_detection_stream(pipeline):
+    node, _client, executor, results, _config = pipeline
+    data = image_data(node)
+    data['stamp'] -= 1.4
+    node.on_detections(String(data=json.dumps(data)))
+    spin_until(executor, lambda: results and results[-1]['error'])
+    assert results[-1]['stream_fresh']
+    assert 'old (limit 1.00 s)' in results[-1]['error']
+    marker = next(m for m in results[-1]['markers'] if m['id'] == 2)
+    assert marker['detected'] and not marker['fresh']
+    assert 'old' in marker['rejection_reason']

@@ -59,27 +59,8 @@ docker exec "${exec_options[@]}" \
         if [ "$2" = only ]; then
             exit 0
         fi
-        # A read-only range overlay may have been added to an existing session.
-        # Stop only that identified helper before the daily launch takes it over.
-        marker_range_pid_file="/tmp/ugv_marker_ranges_${ROS_DOMAIN_ID:-4}.pid"
-        if [ -r "$marker_range_pid_file" ]; then
-            read -r marker_range_pid < "$marker_range_pid_file" || true
-            if [[ "${marker_range_pid:-}" =~ ^[0-9]+$ ]] && [ -r "/proc/$marker_range_pid/cmdline" ]; then
-                marker_range_command=$(tr "\0" " " < "/proc/$marker_range_pid/cmdline")
-                if [[ "$marker_range_command" == *"ros2 launch l2s2_localisation marker_ranges.launch.py"* ]]; then
-                    kill -INT "$marker_range_pid" 2>/dev/null || true
-                    for marker_range_wait in {1..50}; do
-                        kill -0 "$marker_range_pid" 2>/dev/null || break
-                        sleep 0.1
-                    done
-                    if kill -0 "$marker_range_pid" 2>/dev/null; then
-                        echo "The standalone marker range overlay is still stopping; retry startup."
-                        exit 1
-                    fi
-                fi
-            fi
-            rm -f "$marker_range_pid_file"
-        fi
+        # Safely hand over any identified rollout helpers to the daily launch.
+        python3 scripts/stop_rover_helpers.py --domain "${ROS_DOMAIN_ID:-4}"
         # Use the editable source YAML directly: start-pose edits need no rebuild.
         exec ros2 launch ugv_bringup rover.launch.py \
             "field_config:=$1/src/ugv_main/ugv_bringup/param/football_field.yaml" \

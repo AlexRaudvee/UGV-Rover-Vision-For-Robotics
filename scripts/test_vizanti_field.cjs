@@ -53,6 +53,11 @@ assert(drawn.some(d=>d[0]==='fillText' && d[1]==='ID 2 · ~3.3 m'),'measured Apr
 assert(mocks.markerVisuals(ranges,0,3,'map').every(m=>!m.fresh),'previous start alignment reused a live distance');
 assert(mocks.markerVisuals(ranges,3,2,'map').every(m=>!m.fresh),'stale distance remained live');
 assert.equal(mocks.markerVisuals(ranges,0,2,'different_frame').length,0);
+const rejected={...ranges,markers:[{...ranges.markers[0],fresh:false,detected:true,detection_age_s:0,
+    rejection_reason:'corrected-bit count exceeds the configured limit'}]};
+assert.match(mocks.markerVisuals(rejected,0,2,'map')[0].text,/range rejected/);
+const almostStale={...ranges,stale_after_s:1,markers:[{...ranges.markers[0],age_s:.9}]};
+assert(!mocks.markerVisuals(almostStale,.2,2,'map')[0].fresh,'browser retained an expired measurement');
 assert.equal(elements['{uniqueID}_start_x_m'].value,'-3.2');
 assert.equal(elements['{uniqueID}_save_start'].disabled,false);
 const mapped=mocks.transformFieldPoint([2,-1,Math.PI/2],[1,2,3]);

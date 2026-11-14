@@ -100,13 +100,14 @@ class MarkerRanges(Node):
         self.field = None
         self.field_received = self.last_received = None
         self.rejections = {}
+        self.last_seen = {}
         self.error = ''
         self.config_error = ''
         self.last_image_stamp = None
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.result_pub = self.create_publisher(String, '~/result', latched)
         self.markers_pub = self.create_publisher(MarkerArray, '~/markers', latched)
-        self.create_subscription(String, self.config['detections_topic'], self.on_detections, 10)
+        self.create_subscription(String, self.config['detections_topic'], self.on_detections, 1)
         self.create_subscription(CameraInfo, self.config['camera_info_topic'], self.on_camera,
                                  qos_profile_sensor_data)
         self.create_subscription(String, '/football_field/state', self.on_field, 10)
@@ -204,9 +205,18 @@ class MarkerRanges(Node):
     def on_detections(self, message):
         try:
             data = json.loads(message.data)
+            self.last_received = time.monotonic()
+            for item in data.get('detections', []):
+                label = f'{item["family"]}:{int(item["id"])}'
+                self.last_seen[label] = self.last_received
             stamp = float(data['stamp'])
-            if not math.isfinite(stamp) or not -.1 <= self.now()-stamp <= self.config['image_max_age_s']:
-                raise ValueError('detection image timestamp is stale or in the future')
+            age = self.now()-stamp
+            if not math.isfinite(stamp):
+                raise ValueError('detection image timestamp is not finite')
+            if age < -.1:
+                raise ValueError(f'detection image timestamp is {-age:.2f} s in the future')
+            if age > self.config['image_max_age_s']:
+                raise ValueError(f'detection image is {age:.2f} s old (limit {self.config["image_max_age_s"]:.2f} s)')
             if self.last_image_stamp is not None and stamp < self.last_image_stamp:
                 self.filters.clear()
                 self.records.clear()
@@ -289,6 +299,11 @@ class MarkerRanges(Node):
             item = {'family': family, 'id': int(tag_id), 'label': label,
                     'known_position_m': self.config['markers'].get(label),
                     'fresh': False, 'range_m': None}
+            seen = self.last_seen.get(label)
+            seen_age = time.monotonic()-seen if seen is not None else None
+            item['detection_age_s'] = seen_age
+            item['detected'] = seen_age is not None and seen_age <= self.config['stale_after_s']
+            item['rejection_reason'] = (self.error or self.rejections.get(label)) if item['detected'] else None
             if record:
                 age = max(0, now-record['stamp'])
                 item.update(record, age_s=age, fresh=age <= self.config['stale_after_s'])
@@ -298,6 +313,7 @@ class MarkerRanges(Node):
         result = {'frame_id': (self.field or {}).get('frame_id', 'map'),
                   'field_revision': (self.field or {}).get('revision'), 'stamp': now,
                   'source': 'AprilTag 3 estimate_tag_pose', 'distance_kind': 'horizontal robot-centre range',
+                  'stale_after_s': self.config['stale_after_s'],
                   'config_file': str(self.path), 'marker_size_m': self.config['marker_size_m'],
                   'stream_fresh': stream_fresh, 'error': self.config_error or self.error,
                   'rejected': self.rejections, 'markers': items}

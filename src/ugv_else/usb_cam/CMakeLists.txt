@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.5)
 project(usb_cam)
 
+# Match ROS cv_bridge's distro OpenCV, rather than the Jetson's custom CUDA build.
+if(NOT DEFINED OpenCV_DIR AND EXISTS "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/cmake/opencv4/OpenCVConfig.cmake")
+  set(OpenCV_DIR "/usr/lib/${CMAKE_LIBRARY_ARCHITECTURE}/cmake/opencv4" CACHE PATH "ROS distro OpenCV")
+endif()
+
 # Default to C++17
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)

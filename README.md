@@ -43,6 +43,10 @@ outer pattern. Edit the size in
 [`marker_ranges.yaml`](src/l2s2_localisation/config/marker_ranges.yaml) and tag
 positions in [`marker_map.yaml`](src/l2s2_localisation/config/marker_map.yaml).
 See the [distance overlay guide](src/l2s2_localisation/README.md).
+The workspace includes the same USB camera driver version (0.8.1) with its
+microsecond timestamp conversion corrected. This prevents fresh marker images
+from being rejected as a second old. The normal build includes the patched
+driver; the system installation under `/opt/ros/humble` is left unchanged.
 Drag to orbit, scroll to zoom, or select **Follow rover**. **Back to 2D** and the
 **3D** toolbar button switch views. The blue trail records motion since opening
 the view; numeric x/y/yaw use field coordinates after start alignment. The rover is a

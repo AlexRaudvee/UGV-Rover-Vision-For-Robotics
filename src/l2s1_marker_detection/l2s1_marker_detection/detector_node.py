@@ -17,7 +17,7 @@ import numpy as np
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import CompressedImage, Image
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
@@ -64,13 +64,15 @@ class MarkerDetectorNode(Node):
         self.capture_count = 0
 
         topic = self.get_parameter('image_topic').value
+        # Under full rover load, process the newest image rather than a backlog.
+        image_qos = QoSProfile(depth=1, reliability=qos_profile_sensor_data.reliability)
         if topic.endswith('/compressed'):
             self.create_subscription(CompressedImage, topic, self._on_compressed,
-                                     qos_profile_sensor_data)
+                                     image_qos)
         else:
             from cv_bridge import CvBridge
             self.bridge = CvBridge()
-            self.create_subscription(Image, topic, self._on_image, qos_profile_sensor_data)
+            self.create_subscription(Image, topic, self._on_image, image_qos)
         self.detections_pub = self.create_publisher(String, '~/detections', 10)
         self.annotated_pub = self.create_publisher(CompressedImage, '~/annotated/compressed', 1)
         self.create_service(Trigger, '~/capture', self._on_capture)

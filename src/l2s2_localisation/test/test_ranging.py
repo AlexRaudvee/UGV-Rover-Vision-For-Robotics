@@ -68,6 +68,15 @@ def test_corner_and_decoder_quality_checks(native):
         native.estimate_pose(np.zeros((4, 2)), np.zeros((3, 3)), .14, 200, 200, 320, 240)
 
 
+def test_one_corrected_bit_with_strong_margin_still_measures_range(native):
+    camera = CameraModel.from_yaml(CALIBRATION, rectified=True)
+    corners, _ = cv2.projectPoints(square_object_points(.14), np.array([math.pi-.1, 0, 0]),
+                                   np.array([.1, .05, 3]), camera.K, camera.D)
+    item = {'corners': corners.reshape(4, 2), 'hamming': 1, 'decision_margin': 90}
+    result = observe_tag(item, .14, camera, (640, 480), MountModel(), 0, 0, load_config(CONFIG))
+    assert result['position'][0] == pytest.approx(3.04, abs=.001)
+
+
 def test_time_interpolation_wraps_heading_and_rejects_old_pose():
     history = PoseHistory(.25)
     history.add(10, (0, 0, math.radians(179)))

@@ -11,10 +11,14 @@ export function markerVisuals(result, ageSeconds, revision, frame) {
     return (result.markers || []).filter(marker => Array.isArray(marker.map_position_m) &&
         marker.map_position_m.length === 3 && marker.map_position_m.every(Number.isFinite)).map(marker => {
         const sameAlignment = revision === undefined || revision === null || result.field_revision === revision;
+        const ttl = Number.isFinite(result.stale_after_s) ? result.stale_after_s : 1;
+        const measurementAge = (Number.isFinite(marker.age_s) ? marker.age_s : 0) + ageSeconds;
         const fresh = Boolean(marker.fresh && result.stream_fresh && ageSeconds < 1.5 &&
-            sameAlignment && Number.isFinite(marker.range_m));
+            measurementAge <= ttl && sameAlignment && Number.isFinite(marker.range_m));
+        const detected = marker.detected && (marker.detection_age_s || 0) + ageSeconds <= ttl;
         const approximate = marker.low_resolution || marker.samples < 3;
-        const distance = fresh ? `${approximate?'~':''}${marker.range_m.toFixed(approximate?1:2)} m` : 'not visible';
+        const unavailable = detected ? (marker.rejection_reason ? 'range rejected' : 'range pending') : 'not visible';
+        const distance = fresh ? `${approximate?'~':''}${marker.range_m.toFixed(approximate?1:2)} m` : unavailable;
         return {position: marker.map_position_m, robot: fresh ? marker.robot_position_m : null,
             fresh, color: fresh ? '#6df5ec' : '#9baaaa',
             text: `ID ${marker.id} · ${distance}`, approximate: Boolean(fresh && approximate)};
@@ -53,11 +57,14 @@ export class FieldClient {
         if (performance.now()-this.lastRanges > 2000 || !this.ranges.stream_fresh) return 'AprilTag detection stream stale';
         const visible = this.markerVisuals.filter(marker => marker.fresh);
         if (!visible.length) {
-            const reasons = Object.values(this.ranges.rejected || {});
+            const reasons = (this.ranges.markers || []).map(marker => marker.rejection_reason).filter(Boolean);
             return reasons.length ? `AprilTag: ${reasons[0]}` : 'No recent AprilTag distance measurements';
         }
+        const ages = (this.ranges.markers || []).filter(marker => marker.fresh).map(marker => marker.age_s || 0);
+        const delay = Math.max(0, ...ages) + (performance.now()-this.lastRanges)/1000;
         return 'AprilTag ground ranges · ' + visible.map(marker => marker.text).join(' · ') +
-            (visible.some(marker => marker.approximate) ? ' · small tags: approximate ranges' : '');
+            (visible.some(marker => marker.approximate) ? ' · small tags: approximate ranges' : '') +
+            (delay > .5 ? ` · image delay ${delay.toFixed(1)} s` : '');
     }
     call(name, type, request) {
         return new Promise((resolve, reject) => {

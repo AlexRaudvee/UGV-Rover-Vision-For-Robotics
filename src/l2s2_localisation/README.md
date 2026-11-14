@@ -40,6 +40,13 @@ large position outliers. Stale/future image timestamps are rejected. Changing th
 field start clears old observations. These checks improve repeatability; small
 tags and camera/mount calibration still limit physical accuracy.
 
+The limit permits **one corrected bit**: the live small ID 2 tag regularly decodes
+with hamming=1 and a strong decision margin. Two corrected bits remain rejected.
+The pinned workspace `usb_cam` overlay corrects the 0.8.1 clock-conversion bug
+that made fresh frames appear up to almost a second old; the one-second image
+freshness limit is retained. Camera and detector queues keep the latest image
+instead of accumulating work behind the rest of the rover's perception stack.
+
 ### Field locations and editable settings
 
 `config/marker_map.yaml` is shared with the scanner/localization solver:
@@ -83,6 +90,12 @@ without a valid observation. Known landmark icons remain grey and say “not
 visible”; old distance lines are hidden. A stopped range stream is also detected
 by the browser. The ROS MarkerArray output supports other ROS viewers.
 
+If a tag is decoded but cannot pass the distance checks, its icon says **“range
+rejected”**, and the status line gives the actual reason (e.g. decoder quality
+or image age). “Not visible” is reserved for tags with no recent detection.
+The browser also counts a measurement's age after receipt, so a stopped publisher
+cannot keep an already-expiring distance looking fresh.
+
 | Topic | Contents |
 |---|---|
 | `/marker_detector/detections` | Existing pixel detections, image geometry and decoder quality |
@@ -105,7 +118,9 @@ ros2 launch l2s2_localisation marker_ranges.launch.py \
 Stop a manually started standalone launch before starting a new daily rover
 session. The temporary helper installed during the live rollout is recorded in
 `/tmp/ugv_marker_ranges_4.pid` and is stopped automatically by `start_rover.sh`
-before the daily launch takes over. It sends no hardware commands.
+before the daily launch takes over. Camera/detector recovery helpers are handed
+over the same way, using PID and executable checks. They do not reset odometry
+or the field start pose.
 
 ```bash
 ros2 topic echo /marker_ranges/result --once --full-length
