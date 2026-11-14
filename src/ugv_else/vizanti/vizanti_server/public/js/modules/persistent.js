@@ -42,6 +42,13 @@ export class Settings {
 					config.topic = '/polar_hist/obstacle/histogram/compressed';
 				}
 			}
+			// Enable the field frame once when adding the football-field dashboard.
+			// Subsequent browser reloads preserve the user's selected fixed frame.
+			if (defaults.field_fixed_frame && !this.field_frame_initialized) {
+				this.settings_default = {...defaults.settings_default, ...this.settings_default,
+					fixed_frame: defaults.field_fixed_frame};
+				this.field_frame_initialized = true;
+			}
 			this.layout_version = defaults.layout_version;
 			this.save();
 		}

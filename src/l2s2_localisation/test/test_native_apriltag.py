@@ -6,9 +6,9 @@ import cv2
 import numpy as np
 import pytest
 
-from marker_localization.aruco_compat import normalize_family
-from marker_localization.detection import MarkerDetector, PRESETS
-from marker_localization.native_apriltag import _load_extension
+from l2s1_marker_detection.aruco_compat import normalize_family
+from l2s1_marker_detection.detection import MarkerDetector, PRESETS
+from l2s1_marker_detection.native_apriltag import _load_extension
 
 
 def test_standard_family_aliases():

@@ -28,6 +28,7 @@ setup(
             'ugv_bringup = ugv_bringup.ugv_bringup:main',
             'ugv_driver = ugv_bringup.ugv_driver:main',
             'odometry_inputs = ugv_bringup.odometry_inputs:main',
+            'football_field = ugv_bringup.football_field:main',
         ],
     },
 )

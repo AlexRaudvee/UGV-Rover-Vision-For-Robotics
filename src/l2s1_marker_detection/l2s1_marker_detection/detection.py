@@ -65,6 +65,7 @@ class Detection:
     marker_id: int
     corners: np.ndarray
     variant: str = 'raw'
+    quality: dict = None
 
     @property
     def center(self):
@@ -79,7 +80,8 @@ class Detection:
         return {'family': self.family, 'id': self.marker_id, 'variant': self.variant,
                 'center': [round(float(v), 2) for v in self.center],
                 'side_px': round(self.side_px, 2),
-                'corners': [[round(float(x), 2), round(float(y), 2)] for x, y in self.corners]}
+                'corners': [[round(float(x), 2), round(float(y), 2)] for x, y in self.corners],
+                **(self.quality or {})}
 
 
 @dataclass
@@ -179,12 +181,14 @@ class MarkerDetector:
                 corners, ids = detect(work)
                 if ids is None:
                     continue
-                for quad, marker_id in zip(corners, ids.ravel()):
+                for index, (quad, marker_id) in enumerate(zip(corners, ids.ravel())):
                     points = quad.reshape(4, 2).astype(np.float32) / scale
                     if undistorted:
                         points = self.camera.distort_points(points, size)
+                    qualities = getattr(detect, 'qualities', [])
+                    quality = qualities[index] if index < len(qualities) else None
                     found.append(((family_index, variant_index),
-                                  Detection(family, int(marker_id), points, variant)))
+                                  Detection(family, int(marker_id), points, variant, quality)))
         detections = merge_duplicates(found)
         return DetectionResult(detections, (time.perf_counter() - start) * 1000.0, self.name)
 

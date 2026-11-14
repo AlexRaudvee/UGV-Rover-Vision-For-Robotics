@@ -1,12 +1,25 @@
 <section id="{uniqueID}_panel" style="position:fixed;inset:70px 0 0;z-index:15;background:#101923;color:#e6edf3;touch-action:none">
   <canvas id="{uniqueID}_canvas" style="width:100%;height:100%;display:block;touch-action:none"></canvas>
   <div style="position:absolute;top:12px;left:16px;right:12px;font:14px sans-serif;pointer-events:none">
-    <b>3D · odom</b> · floor grid 1 m · drag to orbit · scroll to zoom<br>
+    <b id="{uniqueID}_mode">3D · football field</b> · drag to orbit · scroll to zoom<br>
     <span id="{uniqueID}_status">Waiting for odometry and depth…</span><br>
+    <span id="{uniqueID}_markers_status">Waiting for AprilTag distance measurements…</span><br>
     <span style="pointer-events:auto"><button id="{uniqueID}_origin">View starting point</button>
+    <button id="{uniqueID}_field_view">View whole field</button>
     <button id="{uniqueID}_clear">Clear trail</button>
     <label><input id="{uniqueID}_follow" type="checkbox">Follow rover</label>
     <button id="{uniqueID}_close">Back to 2D</button></span>
   </div>
-  <div style="position:absolute;bottom:12px;left:16px;font:13px sans-serif">Green axes: odometry start · blue trail: since opening · depth coloured by height · schematic rover</div>
+  <details style="position:absolute;right:16px;bottom:36px;max-width:360px;background:#162b22ee;padding:12px;border-radius:8px;font:14px sans-serif" class="inputelement">
+    <summary style="cursor:pointer">Starting position</summary>
+    <p>Place the robot at these coordinates before applying. No movement is commanded.</p>
+    <label>x (m) <input id="{uniqueID}_start_x_m" data-field-key="start_x_m" type="number" step="0.05" value="-3.2" style="width:75px"></label>
+    <label>y (m) <input id="{uniqueID}_start_y_m" data-field-key="start_y_m" type="number" step="0.05" value="0" style="width:75px"></label>
+    <label>heading (°) <input id="{uniqueID}_start_heading_deg" data-field-key="start_heading_deg" type="number" step="1" value="0" style="width:75px"></label>
+    <p><button id="{uniqueID}_save_start">Save &amp; apply start</button>
+    <button id="{uniqueID}_apply_start">Apply saved start here</button></p>
+    <p id="{uniqueID}_start_status" role="status"></p>
+    <small>Configuration: <span id="{uniqueID}_config_file" style="overflow-wrap:anywhere"></span></small>
+  </details>
+  <div style="position:absolute;bottom:12px;left:16px;font:13px sans-serif">Gold: configured start · blue: robot trail · depth coloured by height · schematic rover</div>
 </section>

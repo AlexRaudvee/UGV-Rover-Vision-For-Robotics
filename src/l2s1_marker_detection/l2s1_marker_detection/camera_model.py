@@ -17,18 +17,24 @@ class CameraModel:
     _maps: dict = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
-    def from_yaml(cls, path):
+    def from_yaml(cls, path, rectified=False):
         import yaml
         with open(path) as stream:
             data = yaml.safe_load(stream)
-        return cls(np.array(data['camera_matrix']['data'], float).reshape(3, 3),
-                   np.array(data['distortion_coefficients']['data'], float),
+        matrix = np.array(data['camera_matrix']['data'], float).reshape(3, 3)
+        distortion = np.array(data['distortion_coefficients']['data'], float)
+        if rectified:
+            matrix = np.array(data['projection_matrix']['data'], float).reshape(3, 4)[:, :3]
+            distortion = np.zeros(5)
+        return cls(matrix, distortion,
                    int(data['image_width']), int(data['image_height']))
 
     @classmethod
-    def from_camera_info(cls, message):
+    def from_camera_info(cls, message, rectified=False):
         """Build from a sensor_msgs/CameraInfo (duck-typed, no ROS import)."""
-        return cls(np.array(message.k, float).reshape(3, 3), np.array(message.d, float),
+        matrix = np.array(message.p, float).reshape(3, 4)[:, :3] if rectified else np.array(message.k, float).reshape(3, 3)
+        distortion = np.zeros(5) if rectified else np.array(message.d, float)
+        return cls(matrix, distortion,
                    int(message.width), int(message.height))
 
     def matrix_for(self, width, height):

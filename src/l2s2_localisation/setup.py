@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'scanner = l2s2_localisation.scanner_node:main',
+            'ranges = l2s2_localisation.range_node:main',
         ],
     },
 )

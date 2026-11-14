@@ -5,8 +5,10 @@
 #include <structmember.h>
 #include <numpy/arrayobject.h>
 #include <signal.h>
+#include <math.h>
 
 #include "apriltag.h"
+#include "apriltag_pose.h"
 #include "tag36h10.h"
 #include "tag36h11.h"
 #include "tag25h9.h"
@@ -333,8 +335,92 @@ static PyTypeObject apriltagType =
     .tp_doc       = apriltag_py_type_docstring
 };
 
+// Expose AprilTag 3's pose estimator separately so callers can first undistort
+// corners and restore original pixels after detector preprocessing.
+static PyObject* apriltag_estimate_pose(PyObject* unused, PyObject* args)
+{
+    (void)unused;
+    PyObject *corners_object, *homography_object, *result = NULL;
+    PyArrayObject *corners = NULL, *homography = NULL, *rotation = NULL, *translation = NULL;
+    double size, fx, fy, cx, cy;
+    apriltag_detection_t detection = {0};
+    apriltag_pose_t pose = {0};
+    if (!PyArg_ParseTuple(args, "OOddddd", &corners_object, &homography_object,
+                          &size, &fx, &fy, &cx, &cy))
+        return NULL;
+    if (!isfinite(size) || size <= 0 || !isfinite(fx) || fx <= 0 ||
+        !isfinite(fy) || fy <= 0 || !isfinite(cx) || !isfinite(cy)) {
+        PyErr_SetString(PyExc_ValueError, "size/focal lengths must be positive and camera parameters finite");
+        return NULL;
+    }
+    corners = (PyArrayObject*)PyArray_FROM_OTF(corners_object, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    homography = (PyArrayObject*)PyArray_FROM_OTF(homography_object, NPY_DOUBLE, NPY_ARRAY_IN_ARRAY);
+    if (!corners || !homography)
+        goto done;
+    if (PyArray_NDIM(corners) != 2 || PyArray_DIM(corners, 0) != 4 || PyArray_DIM(corners, 1) != 2 ||
+        PyArray_NDIM(homography) != 2 || PyArray_DIM(homography, 0) != 3 || PyArray_DIM(homography, 1) != 3) {
+        PyErr_SetString(PyExc_ValueError, "expected 4x2 native-order corners and a 3x3 homography");
+        goto done;
+    }
+    double* h = (double*)PyArray_DATA(homography);
+    double* p = (double*)PyArray_DATA(corners);
+    for (int i = 0; i < 9; i++) {
+        if (!isfinite(h[i])) {
+            PyErr_SetString(PyExc_ValueError, "homography must be finite");
+            goto done;
+        }
+    }
+    double determinant = h[0]*(h[4]*h[8]-h[5]*h[7]) - h[1]*(h[3]*h[8]-h[5]*h[6]) + h[2]*(h[3]*h[7]-h[4]*h[6]);
+    if (fabs(determinant) < 1e-12) {
+        PyErr_SetString(PyExc_ValueError, "degenerate tag homography");
+        goto done;
+    }
+    for (int i = 0; i < 8; i++) {
+        if (!isfinite(p[i])) {
+            PyErr_SetString(PyExc_ValueError, "corners must be finite");
+            goto done;
+        }
+        detection.p[i/2][i%2] = p[i];
+    }
+    detection.H = matd_create_data(3, 3, h);
+    apriltag_detection_info_t info = {.det=&detection, .tagsize=size, .fx=fx, .fy=fy, .cx=cx, .cy=cy};
+    double error;
+    Py_BEGIN_ALLOW_THREADS
+    error = estimate_tag_pose(&info, &pose);
+    Py_END_ALLOW_THREADS
+    if (!pose.R || !pose.t || !isfinite(error)) {
+        PyErr_SetString(PyExc_ValueError, "AprilTag pose estimation failed");
+        goto done;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (!isfinite(pose.t->data[i]) || (i == 2 && pose.t->data[i] <= 0)) {
+            PyErr_SetString(PyExc_ValueError, "AprilTag pose is invalid or behind the camera");
+            goto done;
+        }
+    }
+    rotation = (PyArrayObject*)PyArray_SimpleNew(2, ((npy_intp[]){3,3}), NPY_DOUBLE);
+    translation = (PyArrayObject*)PyArray_SimpleNew(1, ((npy_intp[]){3}), NPY_DOUBLE);
+    if (!rotation || !translation)
+        goto done;
+    memcpy(PyArray_DATA(rotation), pose.R->data, 9*sizeof(double));
+    memcpy(PyArray_DATA(translation), pose.t->data, 3*sizeof(double));
+    result = Py_BuildValue("{s:N,s:N,s:d}", "rotation", rotation, "translation", translation, "object_error", error);
+    rotation = translation = NULL;
+done:
+    matd_destroy(detection.H);
+    matd_destroy(pose.R);
+    matd_destroy(pose.t);
+    Py_XDECREF(corners);
+    Py_XDECREF(homography);
+    Py_XDECREF(rotation);
+    Py_XDECREF(translation);
+    return result;
+}
+
 static PyMethodDef methods[] =
-    { {NULL, NULL, 0, NULL}
+    { {"estimate_pose", apriltag_estimate_pose, METH_VARARGS,
+       "AprilTag 3 orthogonal-iteration pose from native corners, homography, size and fx,fy,cx,cy."},
+      {NULL, NULL, 0, NULL}
     };
 
 

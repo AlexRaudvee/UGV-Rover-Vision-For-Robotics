@@ -1,12 +1,17 @@
-# Field positions of the markers, measured with the Bosch laser (metres).
+# Known field positions (metres). The current tags sit at the centre circle's
+# intersections with the halfway line (radius 0.75 m).
 # Frame (assignment Table 2 / Fig. 7): origin at the centre spot, x towards the
 # goal with the curling targets, y to the left.
-# Rebuild (colcon build --packages-select l2s2_localisation) after editing.
+# The live range overlay reloads this source map automatically. A standalone
+# scanner using the installed copy needs a rebuild, or marker_map_file set here.
 field:
   half_length: 4.5
   half_width: 3.0
   border: 0.7
-markers: {}
+markers:
+  # Facing the centre from the -x penalty mark: ID 3 left, ID 2 right.
+  APRILTAG_standard41h12:2: [0.0, -0.75]
+  APRILTAG_standard41h12:3: [0.0, 0.75]
 # Example, replace with the measured positions:
 # markers:
 #   APRILTAG_36h11:1: [0.0, 3.9]

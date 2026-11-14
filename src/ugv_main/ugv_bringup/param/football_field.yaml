@@ -1,0 +1,36 @@
+# Editable source used directly by start_rover.sh; changing the start needs no rebuild.
+# Field centre is (0, 0), +x points towards the opposite goal, +y points left.
+# Edit the three start_* numbers here, or use Football Field in Vizanti.
+football_field:
+  ros__parameters:
+    start_x_m: -3.2
+    start_y_m: 0.0
+    start_heading_deg: 0.0
+    # At node startup, assume the first fresh odometry pose is at the start above.
+    # Use "Apply saved start here" after physically placing the robot for another run.
+    initialize_on_first_odom: true
+    # Disable if AMCL/SLAM/another localizer already owns map -> odom.
+    publish_tf: true
+    map_frame: map
+    odom_frame: odom
+    odom_timeout_s: 1.0
+    # Standard 9 x 6 m RoboCup SPL layout (2025 rulebook, figures 1-3).
+    field_length_m: 9.0
+    field_width_m: 6.0
+    border_m: 0.7
+    line_width_m: 0.05
+    center_circle_radius_m: 0.75
+    penalty_mark_distance_m: 1.3
+    penalty_mark_size_m: 0.1
+    penalty_area_depth_m: 1.65
+    penalty_area_width_m: 4.0
+    goal_area_depth_m: 0.6
+    goal_area_width_m: 2.2
+    goal_opening_width_m: 1.5
+    goal_depth_m: 0.5
+    goal_height_m: 0.8
+    goal_post_diameter_m: 0.1
+    map_resolution_m: 0.01
+    # The standard carpet has no perimeter walls. Enable goal footprints only
+    # when those physical structures are present. Paint is always traversable.
+    map_goal_obstacles: false

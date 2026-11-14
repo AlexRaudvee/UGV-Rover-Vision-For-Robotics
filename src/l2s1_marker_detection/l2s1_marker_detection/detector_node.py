@@ -39,13 +39,19 @@ class MarkerDetectorNode(Node):
 
     def __init__(self):
         super().__init__('marker_detector')
-        self.declare_parameter('image_topic', '/image_raw')
+        self.declare_parameter('image_topic', '/image_rect')
         self.declare_parameter('preset', 'improved')
         self.declare_parameter('families', list(DEFAULT_FAMILIES))
         self.declare_parameter('camera_info_file', _default_camera_info())
         self.declare_parameter('max_rate', 10.0)
         self.declare_parameter('capture_dir', '/home/ws/ugv_ws/runs/marker_captures')
         self.declare_parameter('capture_label', '')
+        self.declare_parameter('image_geometry', 'auto')
+        topic = self.get_parameter('image_topic').value
+        geometry = self.get_parameter('image_geometry').value
+        if geometry not in ('auto', 'raw', 'rectified'):
+            raise ValueError('image_geometry must be auto, raw or rectified')
+        self.image_geometry = ('rectified' if '/image_rect' in topic else 'raw') if geometry == 'auto' else geometry
 
         self.families = tuple(self.get_parameter('families').value)
         self.camera = self._load_camera(self.get_parameter('camera_info_file').value)
@@ -77,7 +83,7 @@ class MarkerDetectorNode(Node):
         if not path:
             return None
         try:
-            return CameraModel.from_yaml(path)
+            return CameraModel.from_yaml(path, rectified=self.image_geometry == 'rectified')
         except (OSError, KeyError, ValueError) as error:
             self.get_logger().warn(f'No camera model from {path!r} ({error}); '
                                    'presets with undistort are unavailable')
@@ -96,7 +102,7 @@ class MarkerDetectorNode(Node):
                     self.get_logger().info(f'Preset {parameter.value} ({self.detector.name})')
                 elif parameter.name == 'capture_label':
                     self.capture_label = str(parameter.value)
-                elif parameter.name in ('image_topic', 'families', 'camera_info_file'):
+                elif parameter.name in ('image_topic', 'families', 'camera_info_file', 'image_geometry'):
                     return SetParametersResult(successful=False,
                                                reason=f'{parameter.name} needs a restart')
             except ValueError as error:
@@ -122,7 +128,8 @@ class MarkerDetectorNode(Node):
         payload = result_dict(result)
         payload.update(stamp=header.stamp.sec + header.stamp.nanosec * 1e-9,
                        frame_id=header.frame_id, width=bgr.shape[1], height=bgr.shape[0],
-                       preset=self.get_parameter('preset').value)
+                       preset=self.get_parameter('preset').value,
+                       image_geometry=self.image_geometry)
         self.detections_pub.publish(String(data=json.dumps(payload)))
         if self.annotated_pub.get_subscription_count():
             self._publish_jpeg(draw(bgr, result.detections, self._status(result)), header)

@@ -1,0 +1,33 @@
+# Live distance overlay. start_rover.sh uses this source file directly.
+# Size is the detected inner square, NOT the 30 cm outer printed pattern.
+marker_size_m: 0.14
+marker_sizes: {}
+only_mapped_markers: true
+detections_topic: /marker_detector/detections
+camera_info_topic: /camera_info
+# Used only for older detector messages without image_geometry metadata.
+image_geometry: rectified
+image_max_age_s: 1.0
+stale_after_s: 1.0
+filter_window_s: 1.0
+filter_samples: 9
+min_side_px: 6.0
+low_resolution_px: 20.0
+max_reprojection_error_px: 1.5
+min_decision_margin: 20.0
+# The native detector legitimately corrects one bit on the small ID 2 tag.
+# Retain the known-ID, margin, reprojection and temporal gates as well.
+max_hamming: 1
+max_range_m: 15.0
+odom_max_skew_s: 0.25
+pan_sign: -1.0
+tilt_sign: 1.0
+initial_pan_deg: 0.0
+initial_tilt_deg: 0.0
+head_settle_s: 0.5
+pan_pivot_xy: [-0.008, 0.0]
+tilt_axis_height: 0.211
+camera_offset: 0.048
+# Shared with the scanner/localization solver. Relative to this config file.
+# Edit/swap ID positions there; both files are checked live once per second.
+marker_map_file: marker_map.yaml

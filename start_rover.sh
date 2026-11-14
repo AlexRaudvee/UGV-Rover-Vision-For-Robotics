@@ -49,11 +49,9 @@ docker exec "${exec_options[@]}" \
         if [ "$2" != skip ]; then
             colcon build --packages-select apriltag --cmake-args -DBUILD_PYTHON_WRAPPER=ON -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
             source install/setup.bash
-            colcon build --packages-select apriltag --cmake-args -DBUILD_PYTHON_WRAPPER=ON -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
-            source install/setup.bash
             python3 scripts/clean_perception_metadata.py install
             MAKEFLAGS=-j1 CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --executor sequential --packages-select \
-                ldlidar rf2o_laser_odometry ugv_bringup ugv_vision object_detection obstacle_detection polar_hist \
+                usb_cam ldlidar rf2o_laser_odometry ugv_bringup ugv_vision object_detection obstacle_detection polar_hist \
                 detection_improved obstacle_avoidance_adv l2s1_marker_detection l2s2_localisation \
                 vizanti_cpp vizanti_server
         fi
@@ -61,5 +59,29 @@ docker exec "${exec_options[@]}" \
         if [ "$2" = only ]; then
             exit 0
         fi
-        exec ros2 launch ugv_bringup rover.launch.py "${@:3}"
+        # A read-only range overlay may have been added to an existing session.
+        # Stop only that identified helper before the daily launch takes it over.
+        marker_range_pid_file="/tmp/ugv_marker_ranges_${ROS_DOMAIN_ID:-4}.pid"
+        if [ -r "$marker_range_pid_file" ]; then
+            read -r marker_range_pid < "$marker_range_pid_file" || true
+            if [[ "${marker_range_pid:-}" =~ ^[0-9]+$ ]] && [ -r "/proc/$marker_range_pid/cmdline" ]; then
+                marker_range_command=$(tr "\0" " " < "/proc/$marker_range_pid/cmdline")
+                if [[ "$marker_range_command" == *"ros2 launch l2s2_localisation marker_ranges.launch.py"* ]]; then
+                    kill -INT "$marker_range_pid" 2>/dev/null || true
+                    for marker_range_wait in {1..50}; do
+                        kill -0 "$marker_range_pid" 2>/dev/null || break
+                        sleep 0.1
+                    done
+                    if kill -0 "$marker_range_pid" 2>/dev/null; then
+                        echo "The standalone marker range overlay is still stopping; retry startup."
+                        exit 1
+                    fi
+                fi
+            fi
+            rm -f "$marker_range_pid_file"
+        fi
+        # Use the editable source YAML directly: start-pose edits need no rebuild.
+        exec ros2 launch ugv_bringup rover.launch.py \
+            "field_config:=$1/src/ugv_main/ugv_bringup/param/football_field.yaml" \
+            "marker_range_config:=$1/src/l2s2_localisation/config/marker_ranges.yaml" "${@:3}"
     ' rover-session "$container_workspace" "$build_mode" "$@"

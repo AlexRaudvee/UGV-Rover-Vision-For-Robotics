@@ -1,0 +1,23 @@
+<div id="{uniqueID}_modal" class="modal_outer noselect">
+  <div class="modal_inner noselect">
+    <h3>Football field · starting position</h3>
+    <p>Field centre is (0, 0). +x points along the pitch; +y points left. Heading 0° faces +x.</p>
+    <label for="{uniqueID}_start_x_m">Start x (metres)</label>
+    <input id="{uniqueID}_start_x_m" data-field-key="start_x_m" type="number" step="0.05" value="-3.2">
+    <label for="{uniqueID}_start_y_m">Start y (metres)</label>
+    <input id="{uniqueID}_start_y_m" data-field-key="start_y_m" type="number" step="0.05" value="0">
+    <label for="{uniqueID}_start_heading_deg">Start heading (degrees, left positive)</label>
+    <input id="{uniqueID}_start_heading_deg" data-field-key="start_heading_deg" type="number" step="1" value="0">
+    <p>Place the robot at the entered position and heading before applying. This aligns the display and saves the numbers; it does not move the robot.</p>
+    <button id="{uniqueID}_save_start">Save &amp; apply start</button>
+    <button id="{uniqueID}_apply_start">Apply saved start here</button>
+    <p id="{uniqueID}_start_status" role="status">Waiting for field server…</p>
+    <p>Editable configuration: <code id="{uniqueID}_config_file"></code></p>
+    <p>The left penalty mark is (−3.2, 0, 0°); the right one is (+3.2, 0, 180°). Reapply the saved start after placing the robot for another run.</p>
+    <button id="{uniqueID}_fit">Fit field to view</button>
+    <p id="{uniqueID}_markers_status" role="status">Waiting for AprilTag distance measurements…</p>
+    <p>Cyan squares mark the known tag positions. Labels show horizontal distance from the robot centre, measured by AprilTag pose estimation using the 14 cm detected square. Dashed lines connect the robot to visible tags. “~” indicates a small or newly acquired tag; stale distances are hidden.</p>
+    <p id="{uniqueID}_status" role="status"></p>
+    <button onclick="removeWidget('{uniqueID}')" class="delete_button">Remove field widget</button>
+  </div>
+</div>

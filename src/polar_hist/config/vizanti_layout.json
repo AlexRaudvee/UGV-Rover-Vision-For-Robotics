@@ -9,6 +9,14 @@
       "id": "rosbridge_default"
     },
     {
+      "type": "footballfield",
+      "id": "football_field"
+    },
+    {
+      "type": "robotmodel",
+      "id": "field_robot"
+    },
+    {
       "type": "scene3d",
       "id": "rover_scene3d"
     },
@@ -110,7 +118,7 @@
     "img_offset_y": "68",
     "rotation": "0"
   },
-  "layout_version": "rover-markers-6",
+  "layout_version": "rover-football-field-7",
   "managed_widgets": [
     "perception_rgb",
     "perception_depth",
@@ -121,7 +129,9 @@
     "perception_wls_image",
     "perception_wls_depth",
     "rover_scene3d",
-    "marker_detection"
+    "marker_detection",
+    "football_field",
+    "field_robot"
   ],
   "perception_wls_image": {
     "topic": "/wls_filtered/compressed",
@@ -152,5 +162,17 @@
     "img_offset_x": "49",
     "img_offset_y": "45",
     "rotation": "0"
-  }
+  },
+  "football_field": {},
+  "field_robot": {
+    "frame": "base_footprint",
+    "sprite": "4wd",
+    "length": "0.4"
+  },
+  "settings_default": {
+    "fixed_frame": "map",
+    "background_color": "#182b23"
+  },
+  "field_fixed_frame": "map",
+  "field_frame_initialized": true
 }

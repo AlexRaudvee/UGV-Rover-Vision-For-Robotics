@@ -30,11 +30,22 @@ and no wheel-turn calibration required. Build RF2O once with `--build`. Use
 [odometry guide](src/ugv_main/ugv_bringup/ODOMETRY.md) for topics, diagnostics,
 limitations, and isolated synthetic tests.
 
-Vizanti now opens a **3D rover and depth** view. The floor grid is 1 m, green
-axes mark the odometry starting point, and the rover outline follows `/odom`.
+Vizanti opens a **3D rover and depth** view over a scaled **RoboCup football field**,
+with the same pitch available in 2D. Edit `start_x_m`, `start_y_m`, and
+`start_heading_deg` in
+[`football_field.yaml`](src/ugv_main/ugv_bringup/param/football_field.yaml), or use
+**Football Field → Save & apply start** in Vizanti. The default is the left
+penalty mark, `(-3.2, 0, 0°)`, facing the centre. Start edits need no rebuild.
+See the [field and starting-position guide](src/ugv_main/ugv_bringup/FOOTBALL_FIELD.md).
+Both field views also show IDs 2 and 3 at the centre-circle edges with **AprilTag
+measured ground ranges**. The detected inner square is 14 cm, not the 30 cm
+outer pattern. Edit the size in
+[`marker_ranges.yaml`](src/l2s2_localisation/config/marker_ranges.yaml) and tag
+positions in [`marker_map.yaml`](src/l2s2_localisation/config/marker_map.yaml).
+See the [distance overlay guide](src/l2s2_localisation/README.md).
 Drag to orbit, scroll to zoom, or select **Follow rover**. **Back to 2D** and the
 **3D** toolbar button switch views. The blue trail records motion since opening
-the view; numeric x/y/yaw remain relative to the odometry origin. The rover is a
+the view; numeric x/y/yaw use field coordinates after start alignment. The rover is a
 schematic body/wheel outline, not a loaded CAD mesh.
 
 The shared WLS metric depth is projected using `/wls_filtered/camera_info` and transformed
