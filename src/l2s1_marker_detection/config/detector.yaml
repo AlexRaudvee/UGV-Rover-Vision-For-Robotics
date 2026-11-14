@@ -2,7 +2,7 @@
   ros__parameters:
     # USB pan-tilt camera. Use /image_rect for the rectified stream, or a topic
     # ending in /compressed (e.g. /oak/rgb/image_rect/compressed) for JPEG input.
-    image_topic: /image_raw
+    image_topic: /image_rect
     # baseline | clahe | sharpen | upscale | tuned | undistort | improved
     # Change while running: ros2 param set /marker_detector preset baseline
     preset: improved

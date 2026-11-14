@@ -14,7 +14,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('params_file',
                               default_value=os.path.join(share, 'config', 'detector.yaml')),
-        DeclareLaunchArgument('image_topic', default_value='/image_raw'),
+        DeclareLaunchArgument('image_topic', default_value='/image_rect'),
         DeclareLaunchArgument('preset', default_value='improved'),
         Node(package='l2s1_marker_detection', executable='detector', name='marker_detector',
              output='screen',

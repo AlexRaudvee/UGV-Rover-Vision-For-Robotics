@@ -39,7 +39,7 @@ class MarkerDetectorNode(Node):
 
     def __init__(self):
         super().__init__('marker_detector')
-        self.declare_parameter('image_topic', '/image_raw')
+        self.declare_parameter('image_topic', '/image_rect')
         self.declare_parameter('preset', 'improved')
         self.declare_parameter('families', list(DEFAULT_FAMILIES))
         self.declare_parameter('camera_info_file', _default_camera_info())
