@@ -1,0 +1,22 @@
+marker_scanner:
+  ros__parameters:
+    # Printed marker size (black square, edge to edge, metres) comes from the
+    # launch argument marker_size_m:=0.15, or: ros2 param set /marker_scanner marker_size_m 0.15
+    # Per-marker overrides if sizes differ, e.g. ['APRILTAG_36h11:3=0.20']
+    marker_sizes: ['']
+    # Pan stops, left positive. The USB camera sees about 96 deg across, so 60 deg
+    # steps overlap by about 36 deg. Pan limits are +/-180 deg; the 180 stop covers
+    # markers straight behind the robot.
+    pan_angles_deg: [-120.0, -60.0, 0.0, 60.0, 120.0, 180.0]
+    tilt_deg: 0.0           # up positive, -30 .. 90
+    return_pan_deg: 0.0
+    settle_s: 1.2           # wait after each pan command before using frames
+    dwell_s: 1.0            # collect detections for this long per stop
+    # Verify once with the look_left service; flip if the camera turns right.
+    pan_sign: -1.0
+    tilt_sign: 1.0
+    # Camera mount from ugv_rover.urdf (metres); check with a tape measure.
+    pan_pivot_xy: [-0.008, 0.0]
+    tilt_axis_height: 0.211
+    camera_offset: 0.048
+    result_dir: /home/ws/ugv_ws/runs/marker_scans
