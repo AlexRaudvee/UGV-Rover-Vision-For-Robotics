@@ -86,9 +86,23 @@ def main():
         sys.exit(f'Cannot reach the rover at ws://{ROVER}:{PORT}. Is start_rover.sh running '
                  'and Proton VPN off?')
     cmd = roslibpy.Topic(ros, '/cmd_vel', 'geometry_msgs/Twist')
-    camera_cmd = roslibpy.Topic(ros, '/localization/pan_tilt_manual', 'sensor_msgs/JointState')
-    cmd.advertise()
-    camera_cmd.advertise()
+    # Camera commands go to the pan tracker, which passes them on and pauses its own
+    # tracking. If no tracker is running, they go straight to the driver instead.
+    camera_via_tracker = roslibpy.Topic(ros, '/localization/pan_tilt_manual', 'sensor_msgs/JointState')
+    camera_direct = roslibpy.Topic(ros, '/localization/pan_tilt_command', 'sensor_msgs/JointState')
+    for topic in (cmd, camera_via_tracker, camera_direct):
+        topic.advertise()
+    tracker = {'running': None, 'checked': 0.0}
+    who_listens = roslibpy.Service(ros, '/rosapi/subscribers', 'rosapi/Subscribers')
+
+    def check_tracker():
+        def answer(result):
+            tracker['running'] = any('pan_tracker' in node for node in result.get('subscribers', []))
+        who_listens.call(roslibpy.ServiceRequest({'topic': '/localization/pan_tilt_manual'}),
+                         callback=answer, errback=lambda *_: None)
+        tracker['checked'] = time.monotonic()
+
+    check_tracker()
 
     # Current camera angles (deg, pan left positive), kept in sync with what the
     # rover actually sends to the servos, so manual moves start from there.
@@ -111,7 +125,8 @@ def main():
                                       'angular': {'x': 0.0, 'y': 0.0, 'z': w}}))
 
     def send_camera():
-        camera_cmd.publish(roslibpy.Message({
+        target = camera_direct if tracker['running'] is False else camera_via_tracker
+        target.publish(roslibpy.Message({
             'header': {'stamp': {'sec': 0, 'nanosec': 0}, 'frame_id': ''},
             'name': [PAN_JOINT, TILT_JOINT],
             'position': [PAN_SIGN * math.radians(camera['pan']), TILT_SIGN * math.radians(camera['tilt'])],
@@ -160,10 +175,15 @@ def main():
                 camera['tilt'] = max(TILT_MIN, min(TILT_MAX, camera['tilt'] - tilt_in * TILT_RATE * dt))
                 camera['manual_until'] = time.monotonic() + 0.5
                 send_camera()
+            if time.monotonic() - tracker['checked'] > 2.0:
+                check_tracker()
             manual = time.monotonic() < camera['manual_until']
-            cam = f'camera pan {camera["pan"]:+5.0f} tilt {camera["tilt"]:+4.0f}' + (' (manual)' if manual else '')
+            route = ('' if tracker['running'] is None else
+                     ' via tracker' if tracker['running'] else ' DIRECT (no tracker)')
+            cam = (f'camera pan {camera["pan"]:+5.0f} tilt {camera["tilt"]:+4.0f}'
+                   + (' (manual)' if manual else '') + route)
 
-            print(f'\r{wheels:36} | {cam:40}', end='', flush=True)
+            print(f'\r{wheels:36} | {cam:60}', end='', flush=True)
             time.sleep(dt)
     except KeyboardInterrupt:
         pass
@@ -172,8 +192,8 @@ def main():
             for _ in range(5):
                 send(0.0, 0.0)
                 time.sleep(0.02)
-            cmd.unadvertise()
-            camera_cmd.unadvertise()
+            for topic in (cmd, camera_via_tracker, camera_direct):
+                topic.unadvertise()
             ros.terminate()
         print('\nStopped and disconnected.')
 
