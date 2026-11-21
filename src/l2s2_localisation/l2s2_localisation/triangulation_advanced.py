@@ -24,7 +24,8 @@ Equations (same names as the write-up):
      number of spare measurements, dof = (#ranges + #bearings) - 3. If it is
      above the chi-square limit for dof (99 %), the markers disagree by more
      than noise explains: drop the marker whose removal lowers the score most,
-     re-solve, check again. Needs 3+ markers (with 2 a bad one cannot be found).
+     re-solve, check again. 3 markers: a bad one is DETECTED (warning) but not
+     identified reliably (any 2 left over fit each other); 4+: it is dropped.
 
 Works with 2 or more markers that have bearings. No ROS imports.
 """

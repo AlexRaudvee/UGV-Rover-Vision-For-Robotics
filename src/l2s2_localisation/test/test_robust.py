@@ -9,7 +9,10 @@ from l2s2_localisation.triangulation import Field, Landmark, wrap
 from l2s2_localisation.triangulation_advanced import (NoiseModel, chi2_limit, localize_advanced,
                                                       localize_robust)
 
-# Field data, 18 Nov 2026: rover at (0, 0), centre-spot sweep (center_sweep2_221736).
+# Rover at (0, 0), centre-spot sweep (center_sweep2_221736), FIRST quick analysis:
+# it used frames taken while the pan servo was still moving, which gave tag 1 a
+# bearing ~15 deg off (-91 instead of -106). Kept as a realistic "one bad marker"
+# case; with settled frames only (scripts/lab2/test_triangulation_bags.py) all 5 agree.
 MAP = {1: (-1.5, -3.0), 2: (-1.5, 3.0), 3: (1.55, -3.0), 4: (1.55, 3.0), 5: (4.5, 0.0)}
 CAMERA = {1: (3.42, -91.0, 8.8), 2: (3.51, 126.4, 8.2), 3: (3.57, -53.5, 8.2),
           4: (3.60, 72.2, 8.3), 5: (5.16, 6.8, 8.1)}          # range m, bearing deg, side px
