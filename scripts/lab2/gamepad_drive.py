@@ -7,12 +7,12 @@ laptop needs no ROS. The rover session (start_rover.sh) must be running.
     <venv python> gamepad_drive.py --show     only print sticks/buttons (to check the mapping)
 
 Xbox 360 layout:
-    hold LB         enable driving (let go = stop)
+    hold RT         enable driving (press more than halfway; let go = stop)
     left stick      up/down = forward/backward, left/right = turn
     right stick     move the camera: left/right = pan, up/down = tilt
-                    (no LB needed; automatic camera tracking resumes 3 s after you let go)
-    Y               camera back to straight ahead
-    B               emergency stop (let go of LB, then hold it again to continue)
+                    (no RT needed; automatic camera tracking resumes 3 s after you let go)
+    B               camera back to straight ahead
+    Y               emergency stop (let go of RT, then press it again to continue)
     Back            quit
 """
 import math
@@ -36,7 +36,9 @@ RATE_HZ = 20
 
 AXIS_FORWARD, AXIS_TURN = 1, 0          # left stick Y, left stick X
 AXIS_PAN, AXIS_TILT = 2, 3              # right stick X, right stick Y
-BUTTON_ENABLE, BUTTON_STOP, BUTTON_CENTER, BUTTON_QUIT = 4, 1, 3, 6   # LB, B, Y, Back
+AXIS_ENABLE = 5                         # right trigger RT: -1 released, +1 fully pressed
+ENABLE_ABOVE = 0.0                      # RT pressed more than halfway
+BUTTON_STOP, BUTTON_CENTER, BUTTON_QUIT = 3, 1, 6   # Y, B, Back
 PAN_JOINT, TILT_JOINT = 'pt_base_link_to_pt_link1', 'pt_link1_to_pt_link2'
 
 
@@ -114,8 +116,8 @@ def main():
             'position': [PAN_SIGN * math.radians(camera['pan']), TILT_SIGN * math.radians(camera['tilt'])],
             'velocity': [], 'effort': []}))
 
-    print('Connected. Hold LB to drive, right stick = camera, Y = camera centre, B = stop, Back = quit.')
-    stopped, was_driving = False, False
+    print('Connected. Hold RT to drive, right stick = camera, B = camera centre, Y = stop, Back = quit.')
+    stopped, was_driving, armed = False, False, False
     dt = 1.0 / RATE_HZ
     try:
         while ros.is_connected:
@@ -124,11 +126,14 @@ def main():
                 break
 
             # ---- wheels
-            enable = pad.get_button(BUTTON_ENABLE)
+            trigger = pad.get_axis(AXIS_ENABLE)
+            if trigger < -0.5:
+                armed = True                          # RT seen released at least once
+            enable = armed and trigger > ENABLE_ABOVE
             if pad.get_button(BUTTON_STOP):
                 stopped = True
             if not enable:
-                stopped = False                       # releasing LB clears the emergency stop
+                stopped = False                       # releasing RT clears the emergency stop
             if enable and not stopped:
                 v = -shaped(pad.get_axis(AXIS_FORWARD)) * MAX_SPEED
                 w = -shaped(pad.get_axis(AXIS_TURN)) * MAX_TURN
@@ -140,7 +145,8 @@ def main():
                     for _ in range(5):
                         send(0.0, 0.0)
                     was_driving = False
-                wheels = 'STOPPED (let go of LB)' if stopped else 'idle (hold LB)'
+                wheels = ('STOPPED (let go of RT)' if stopped else 'idle (hold RT)' if armed
+                          else 'press and release RT once')
 
             # ---- camera
             pan_in, tilt_in = shaped(pad.get_axis(AXIS_PAN)), shaped(pad.get_axis(AXIS_TILT))
