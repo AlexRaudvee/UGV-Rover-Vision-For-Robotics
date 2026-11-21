@@ -23,3 +23,7 @@ marker_pan_tracker:
     # 0 = derive asymmetric left/right limits from CameraInfo / calibration.
     horizontal_fov_deg: 0.0
     fov_range_m: 4.0
+    # Only one tag in view: 'center' = turn back to 0 deg, 'search' = keep the tag
+    # in view and swing up to search_reach_deg to each side to find a second one.
+    one_marker: center
+    search_reach_deg: 36.0

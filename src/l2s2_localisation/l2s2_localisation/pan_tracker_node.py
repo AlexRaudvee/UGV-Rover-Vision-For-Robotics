@@ -27,7 +27,8 @@ class PanTracker(Node):
                         detection_timeout_s=.8, max_image_age_s=1., max_speed_deg_s=8., gain=.7,
                         deadband_deg=3., smoothing_alpha=.25, max_pan_deg=120., tilt_deg=0.,
                         update_rate_hz=20., pan_sign=-1., tilt_sign=1., horizontal_fov_deg=0., fov_range_m=4.,
-                        max_hamming=1, min_decision_margin=20.)
+                        max_hamming=1, min_decision_margin=20., one_marker='center',
+                        search_reach_deg=36.)
         for name, value in defaults.items():
             # Accept YAML numbers such as `1` for second/degree settings too.
             self.declare_parameter(name, value,
@@ -41,7 +42,8 @@ class PanTracker(Node):
                 p[name] = float(p[name])
         self.control = PanController(p['target_ids'], p['missing_frames'], p['detection_timeout_s'],
                                      p['max_speed_deg_s'], p['gain'], p['deadband_deg'],
-                                     p['smoothing_alpha'], p['max_pan_deg'])
+                                     p['smoothing_alpha'], p['max_pan_deg'],
+                                     p['one_marker'], p['search_reach_deg'])
         if not all(math.isfinite(p[k]) for k in ('update_rate_hz', 'tilt_deg', 'pan_sign', 'tilt_sign', 'horizontal_fov_deg', 'fov_range_m', 'max_image_age_s')):
             raise ValueError('Tracker settings must be finite')
         if not 5 <= p['update_rate_hz'] <= 100 or p['fov_range_m'] <= 0 or p['max_image_age_s'] <= 0 or not 0 <= p['horizontal_fov_deg'] < 180:

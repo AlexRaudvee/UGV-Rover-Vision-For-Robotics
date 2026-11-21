@@ -4,7 +4,17 @@ import math
 
 class PanController:
     def __init__(self, ids, missing_frames=3, timeout=.8, speed=8., gain=.7,
-                 deadband=3., alpha=.25, limit=120.):
+                 deadband=3., alpha=.25, limit=120., one_marker='center',
+                 search_reach=36.):
+        # What to do when only ONE tag is in view:
+        #   'center': turn back to 0 deg (original behaviour)
+        #   'search': keep the tag in the image and swing the camera up to
+        #             search_reach deg to either side of it until a second tag appears
+        if one_marker not in ('center', 'search'):
+            raise ValueError("one_marker must be 'center' or 'search'")
+        if not math.isfinite(search_reach) or not 0 <= search_reach < 90:
+            raise ValueError('search_reach must be between 0 and 90 deg')
+        self.one_marker, self.search_reach, self.search_dir = one_marker, search_reach, 1.
         if len(ids) < 2 or len(set(ids)) != len(ids) or any(type(tag) is not int or tag < 0 for tag in ids):
             raise ValueError('Specify at least two distinct nonnegative integer target IDs')
         if type(missing_frames) is not int or missing_frames < 1:
@@ -48,6 +58,13 @@ class PanController:
             error = target-self.pan
             target = self.pan if abs(error) <= self.deadband else self.pan+self.gain*error
             self.mode = 'tracking_markers'
+        elif len(self.tracked_ids) == 1 and self.one_marker == 'search':
+            angle = self.tracks[self.tracked_ids[0]]['angle']
+            target = max(-self.limit, min(self.limit, angle + self.search_dir*self.search_reach))
+            if abs(target-self.pan) <= 1.:
+                # Reached this side (tag now at the image edge): look the other way.
+                self.search_dir = -self.search_dir
+            self.mode = 'searching_with_one_marker'
         else:
             target, self.mode = 0., 'centering'
         target = max(-self.limit, min(self.limit, target))
