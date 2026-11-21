@@ -21,3 +21,13 @@ and start it again afterwards:
 
 The drive scripts move the rover: check the path is clear, also straight ahead.
 To record while a script runs, start `ros2 bag record ...` in another terminal first.
+
+## Looking at recorded bags
+
+| Script | Where | What it does |
+|---|---|---|
+| `bag_tags.py BAG` | rover container | Which tags were seen at each pan angle |
+| `bag_ranges.py BAG` | rover container | Distance and direction to each tag (tag size 0.14 m) |
+| `test_triangulation_bags.py [BAG_FOLDER]` | laptop (`pip install rosbags opencv-python`) | Runs every triangulation method on the Lab 2 bags and compares with the measured positions |
+
+For the laptop script, put `src/l2s2_localisation` and `src/l2s1_marker_detection` on `PYTHONPATH`.
