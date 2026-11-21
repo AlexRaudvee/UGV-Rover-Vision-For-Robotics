@@ -29,6 +29,7 @@ setup(
             'pan_tracker = l2s2_localisation.pan_tracker_node:main',
             'triangulation = l2s2_localisation.triangulation_node:main',
             'ekf = l2s2_localisation.ekf_node:main',
+            'path_planner = l2s2_localisation.path_node:main',
         ],
     },
 )
