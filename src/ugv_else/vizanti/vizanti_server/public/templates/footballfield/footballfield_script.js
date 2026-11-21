@@ -45,6 +45,13 @@ function render(now) {
         line.points.map(screen).forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
         ctx.stroke();
     }
+    const fov = field.cameraFov.map(screen);
+    if (fov.length) {
+        ctx.beginPath();
+        fov.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+        ctx.closePath(); ctx.fillStyle = 'rgba(80,180,255,0.16)'; ctx.fill();
+        ctx.strokeStyle = '#50b4ff'; ctx.lineWidth = 1.5; ctx.stroke();
+    }
     const start = field.state?.start;
     if (start) {
         const x = start.start_x_m, y = start.start_y_m, yaw = start.start_heading_deg * Math.PI/180;
@@ -67,7 +74,26 @@ function render(now) {
         ctx.fillStyle = marker.color; ctx.font = 'bold 14px sans-serif';
         ctx.fillText(marker.text, p.x+12, p.y-10);
     }
-    el('markers_status').textContent = field.rangeStatus;
+    for (const pose of [field.odomVisual, field.triangulationVisual].filter(Boolean)) {
+        const p = screen(pose.position);
+        ctx.strokeStyle = pose.color; ctx.lineWidth = 2.5;
+        if (pose.odom) {
+            const odom = screen(pose.odom);
+            ctx.setLineDash([4, 4]); ctx.beginPath();
+            ctx.moveTo(odom.x, odom.y); ctx.lineTo(p.x, p.y); ctx.stroke(); ctx.setLineDash([]);
+        }
+        ctx.beginPath(); ctx.arc(p.x, p.y, 9, 0, Math.PI*2);
+        ctx.moveTo(p.x-5, p.y); ctx.lineTo(p.x+5, p.y);
+        ctx.moveTo(p.x, p.y-5); ctx.lineTo(p.x, p.y+5); ctx.stroke();
+        if (pose.heading !== null) {
+            const end = screen([pose.position[0]+.4*Math.cos(pose.heading),
+                pose.position[1]+.4*Math.sin(pose.heading), pose.position[2]]);
+            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(end.x, end.y); ctx.stroke();
+        }
+        ctx.fillStyle = pose.color; ctx.font = 'bold 13px sans-serif';
+        ctx.fillText(pose.text, p.x+12, p.y+(pose.odom !== undefined ? 22 : -24));
+    }
+    el('markers_status').textContent = [field.rangeStatus, field.cameraStatus, field.localizationStatus].filter(Boolean).join(' · ');
     el('status').textContent = !field.connected ? 'Field server unavailable' :
         field.state?.odom_fresh ? 'Field and robot alignment active' : 'Field ready · waiting for fresh odometry';
 }

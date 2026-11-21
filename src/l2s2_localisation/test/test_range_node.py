@@ -13,6 +13,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
+from sensor_msgs.msg import JointState
 
 from l2s2_localisation.geometry import square_object_points
 from l2s2_localisation.range_node import MarkerRanges
@@ -22,8 +23,10 @@ from l2s2_localisation.range_node import MarkerRanges
 def pipeline(tmp_path):
     config = tmp_path / 'ranges.yaml'
     config.write_text((Path(__file__).resolve().parents[1] / 'config/marker_ranges.yaml').read_text())
-    (tmp_path / 'marker_map.yaml').write_text((
-        Path(__file__).resolve().parents[1] / 'config/marker_map.yaml').read_text())
+    # Synthetic landmarks must be independent of the operator's editable map.
+    (tmp_path / 'marker_map.yaml').write_text(
+        'markers:\n  APRILTAG_standard41h12:2: [0.0, -0.75]\n'
+        '  APRILTAG_standard41h12:3: [0.0, 0.75]\n')
     rclpy.init(args=['--ros-args', '-p', f'config_file:={config}'], domain_id=95)
     node = MarkerRanges()
     client = Node('range_test_client', use_global_arguments=False)
@@ -142,6 +145,24 @@ def test_image_exposure_before_head_settles_is_rejected(pipeline):
     with pytest.raises(ValueError, match='settling'):
         node.head_at(stamp)
     assert node.head_at(stamp+1) == (.5, 0)
+
+
+def test_smooth_head_tracking_does_not_block_live_ranging(pipeline):
+    node, _client, _executor, _results, _config = pipeline
+    stamp = node.now()
+    node.commands.append((stamp-1, 0, 0, stamp-1))
+    msg = JointState()
+    msg.name = ['pt_base_link_to_pt_link1', 'pt_link1_to_pt_link2']
+    msg.position = [-math.radians(.8), 0.]
+    msg.header.stamp.sec = int(stamp)
+    msg.header.stamp.nanosec = int((stamp-int(stamp))*1e9)
+    node.on_joints(msg)
+    assert node.head_at(stamp+.001) == pytest.approx((math.radians(.8), 0))
+    # An abrupt manual jump still receives the existing settling protection.
+    msg.position[0] = -math.radians(30)
+    node.on_joints(msg)
+    with pytest.raises(ValueError, match='settling'):
+        node.head_at(stamp+.001)
 
 
 def test_malformed_field_alignment_and_map_do_not_replace_valid_state(pipeline):

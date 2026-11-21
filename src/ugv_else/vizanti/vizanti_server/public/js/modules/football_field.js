@@ -6,6 +6,25 @@ export function transformFieldPoint(transform, point) {
     return [x + c * point[0] - s * point[1], y + s * point[0] + c * point[1], point[2]];
 }
 
+// Horizontal viewing sector on the floor, from commanded head angles.
+export function cameraFov(camera, field, ageSeconds) {
+    if (!camera?.ready || !field?.aligned || !field.odom_fresh || !Number.isFinite(ageSeconds) || ageSeconds > 1 || ageSeconds < 0 ||
+        !Array.isArray(field.robot) || field.robot.length !== 3 || !field.robot.every(Number.isFinite) ||
+        !Array.isArray(camera.origin_base) || camera.origin_base.length !== 3 || !camera.origin_base.every(Number.isFinite) ||
+        ![camera.pan_deg, camera.left_rad, camera.right_rad, camera.range_m, camera.horizontal_fov_deg].every(Number.isFinite) ||
+        camera.range_m <= 0 || camera.left_rad <= 0 || camera.right_rad <= 0 ||
+        camera.left_rad + camera.right_rad >= Math.PI) return [];
+    const origin = camera.origin_base, pan = camera.pan_deg * Math.PI / 180;
+    const points = [origin];
+    for (let i = 0; i <= 24; i++) {
+        const angle = pan - camera.right_rad + (camera.left_rad + camera.right_rad) * i / 24;
+        points.push([origin[0] + camera.range_m * Math.cos(angle),
+            origin[1] + camera.range_m * Math.sin(angle), origin[2]]);
+    }
+    points.push(origin);
+    return points.map(point => transformFieldPoint(field.robot, point));
+}
+
 export function markerVisuals(result, ageSeconds, revision, frame) {
     if (!result || (frame && result.frame_id !== frame)) return [];
     return (result.markers || []).filter(marker => Array.isArray(marker.map_position_m) &&
@@ -25,13 +44,28 @@ export function markerVisuals(result, ageSeconds, revision, frame) {
     });
 }
 
+export function triangulationVisual(result, ageSeconds, revision, frame) {
+    if (!result?.fresh || result.frame_id !== frame || !Number.isFinite(ageSeconds) || ageSeconds < 0 ||
+        !Number.isFinite(result.age_s) || !Number.isFinite(result.stale_after_s) ||
+        result.age_s + ageSeconds > result.stale_after_s ||
+        (revision != null && result.field_revision !== revision) ||
+        !Array.isArray(result.position_m) || result.position_m.length !== 3 ||
+        !result.position_m.every(Number.isFinite)) return null;
+    return {position: result.position_m, heading: Number.isFinite(result.heading_deg) ? result.heading_deg*Math.PI/180 : null,
+        odom: Array.isArray(result.odom_position_m) && result.odom_position_m.length === 3 &&
+            result.odom_position_m.every(Number.isFinite) ? result.odom_position_m : null,
+        color: '#ff79df', text: `TRIANGULATION (${result.position_m[0].toFixed(2)}, ${result.position_m[1].toFixed(2)})`};
+}
+
 export class FieldClient {
     constructor(onUpdate = () => {}) {
-        this.layout = this.state = this.ranges = null;
-        this.lastState = this.lastRanges = 0;
+        this.layout = this.state = this.ranges = this.camera = this.triangulation = null;
+        this.lastState = this.lastRanges = this.lastCamera = this.lastTriangulation = 0;
         this.listeners = new Set([onUpdate]);
-        this.topics = ['layout', 'state', 'ranges'].map(kind => {
-            const name = kind === 'ranges' ? '/marker_ranges/result' : `/football_field/${kind}`;
+        this.topics = ['layout', 'state', 'ranges', 'camera', 'triangulation'].map(kind => {
+            const name = kind === 'ranges' ? '/marker_ranges/result' :
+                kind === 'camera' ? '/marker_pan_tracker/state' :
+                kind === 'triangulation' ? '/marker_triangulation/result' : `/football_field/${kind}`;
             const topic = new ROSLIB.Topic({ros: rosbridge.ros, name,
                 messageType: 'std_msgs/msg/String', compression: rosbridge.compression,
                 queue_length: 1});
@@ -40,6 +74,8 @@ export class FieldClient {
                     this[kind] = JSON.parse(message.data);
                     if (kind === 'state') this.lastState = performance.now();
                     if (kind === 'ranges') this.lastRanges = performance.now();
+                    if (kind === 'camera') this.lastCamera = performance.now();
+                    if (kind === 'triangulation') this.lastTriangulation = performance.now();
                     for (const listener of this.listeners) listener();
                 } catch (error) { console.warn('Football field message:', error); }
             });
@@ -47,6 +83,35 @@ export class FieldClient {
         });
     }
     get connected() { return this.lastState > 0 && performance.now() - this.lastState < 2500; }
+    get triangulationVisual() {
+        return triangulationVisual(this.triangulation, (performance.now()-this.lastTriangulation)/1000,
+            this.state?.revision, this.layout?.frame_id);
+    }
+    get odomVisual() {
+        const robot = this.state?.robot;
+        if (!this.connected || !this.state?.odom_fresh || !this.state.aligned ||
+            !Array.isArray(robot) || robot.length !== 3 || !robot.every(Number.isFinite)) return null;
+        return {position: [robot[0], robot[1], .02], heading: robot[2], color: '#f7c76b',
+            text: `ODOM (${robot[0].toFixed(2)}, ${robot[1].toFixed(2)})`};
+    }
+    get localizationStatus() {
+        if (!this.triangulation) return 'Waiting for triangulation';
+        if (!this.triangulationVisual) return `Triangulation: ${this.triangulation.error || 'measurement stale'}`;
+        const delta = this.triangulation.position_delta_m;
+        return `Triangulation: ${(this.triangulation.used_ids || []).length} markers` +
+            (Number.isFinite(delta) ? ` · Δ odometry ${delta.toFixed(2)} m (image time)` : ' · odometry comparison unavailable');
+    }
+    get cameraFov() {
+        if (!this.connected || this.state?.frame_id !== this.layout?.frame_id) return [];
+        return cameraFov(this.camera, this.state, (performance.now()-this.lastCamera)/1000);
+    }
+    get cameraStatus() {
+        if (!this.cameraFov.length) return '';
+        return `Camera view (estimated) ${this.camera.horizontal_fov_deg.toFixed(0)}° · ` +
+            (['tracking_markers', 'tracking_pair'].includes(this.camera.mode) ?
+                (Array.isArray(this.camera.tracked_ids) ? `tracking ${this.camera.tracked_ids.length} tags` : 'tracking tags') :
+                'centering forward');
+    }
     get markerVisuals() {
         return markerVisuals(this.ranges, (performance.now()-this.lastRanges)/1000,
             this.state?.revision, this.layout?.frame_id);

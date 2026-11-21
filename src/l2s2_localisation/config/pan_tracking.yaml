@@ -1,0 +1,25 @@
+marker_pan_tracker:
+  ros__parameters:
+    # Active only with marker_ranges.launch.py; disable with pan_tracking:=false.
+    # Any two or more of these physical tags can drive tracking.
+    # Independent of map coordinates; add IDs here when adding field markers.
+    target_ids: [0, 1, 2, 3, 4, 5]
+    target_family: APRILTAG_standard41h12
+    max_hamming: 1
+    min_decision_margin: 20.0
+    missing_frames: 3  # Consecutive detector frames before discarding each missing tag.
+    # Retire missing observations by time too, including a stopped detector.
+    detection_timeout_s: 1
+    max_image_age_s: 1.5
+    max_speed_deg_s: 8.0  # Maximum pan setpoint change per second, including return.
+    gain: 0.7
+    deadband_deg: 3.0
+    smoothing_alpha: 0.25
+    max_pan_deg: 120.0
+    tilt_deg: 0.0
+    update_rate_hz: 20.0  # 5..100 Hz; use 20 for small, smooth setpoint steps.
+    pan_sign: -1.0
+    tilt_sign: 1.0
+    # 0 = derive asymmetric left/right limits from CameraInfo / calibration.
+    horizontal_fov_deg: 0.0
+    fov_range_m: 4.0

@@ -16,13 +16,18 @@ for (const name of ['panel','canvas','follow','status','toggle','origin','clear'
         isConnected:true, getContext:()=>context, addEventListener:()=>{}, setPointerCapture:()=>{}};
 const helperSource = fs.readFileSync('src/ugv_else/vizanti/vizanti_server/public/js/modules/football_field.js','utf8')
     .replace(/^import .*$/m,'').replace(/export /g, '');
-const helpers = vm.runInNewContext(`(()=>{${helperSource}; return {transformFieldPoint,markerVisuals};})()`);
+const helpers = vm.runInNewContext(`(()=>{${helperSource}; return {transformFieldPoint,markerVisuals,cameraFov,triangulationVisual};})()`);
 const state = vm.createContext({mocks:{rosbridge:{ros:{},compression:'none'}, settings:{save(){}},
     transformFieldPoint:helpers.transformFieldPoint, FieldClient:class {
         constructor(update){fieldClient=this;this.update=update;this.state=null;this.layout=null;this.connected=true;}
         bindControls(){} close(){fieldClosed=true;}
         get markerVisuals(){return helpers.markerVisuals(this.ranges,(now-1000)/1000,this.state && this.state.revision,this.layout && this.layout.frame_id);}
         get rangeStatus(){return 'AprilTag test ranges';}
+        get cameraFov(){return helpers.cameraFov(this.camera,this.state,(now-1000)/1000);}
+        get cameraStatus(){return this.cameraFov.length ? 'Camera view (estimated)' : '';}
+        get triangulationVisual(){return helpers.triangulationVisual(this.triangulation,(now-1000)/1000,
+            this.state && this.state.revision,this.layout && this.layout.frame_id);}
+        get localizationStatus(){return this.triangulationVisual ? 'Triangulation: 2 markers' : 'Triangulation stale';}
     }},
     document:{getElementById:id=>elements[id]}, performance:{now:()=>now},
     requestAnimationFrame:callback=>{frame=callback;}, atob: v=>Buffer.from(v,'base64').toString('binary'),
@@ -45,7 +50,7 @@ cloud.data = Array.from(bytes); topics['/vizanti/depth/points'](cloud);frame();
 assert.equal(rectangles,2, 'byte-array cloud did not render');
 fieldClient.layout={frame_id:'map',ground_color:'#28753c',ground:[[-5.2,-3.7,0],[5.2,-3.7,0],[5.2,3.7,0],[-5.2,3.7,0]],
     lines:[{points:[[-4.5,-3,0],[4.5,-3,0]],color:'#ffffff',width_m:.05}]};
-fieldClient.state={aligned:true,transform:[2,-1,Math.PI/2],revision:1,
+fieldClient.state={aligned:true,odom_fresh:true,robot:[0,0,Math.PI/2],transform:[2,-1,Math.PI/2],revision:1,
     start:{start_x_m:-3.2,start_y_m:0,start_heading_deg:0}};
 fieldClient.ranges={frame_id:'map',field_revision:1,stream_fresh:true,markers:[{
     id:2,map_position_m:[0,-.75,0],robot_position_m:[-3.2,0,0],range_m:3.286,
@@ -57,13 +62,29 @@ assert.match(elements['{uniqueID}_mode'].textContent,/map · SPL field/);
 assert(groundFills>0,'field ground did not render');
 assert(labels.includes('ID 2 · ~3.3 m'),'AprilTag measured distance did not render in 3D');
 assert.equal(rectangles,3,'cloud failed to render in field coordinates');
+fieldClient.triangulation={fresh:true,frame_id:'map',field_revision:1,position_m:[-.3,.2,0],
+    heading_deg:75,odom_position_m:[0,0,0],age_s:0,stale_after_s:1};
+frame();
+assert(labels.includes('TRIANGULATION (-0.30, 0.20)'),'triangulation position missing in 3D');
+assert(labels.includes('ODOM (0.00, 0.00)'),'odometry position label missing in 3D');
+assert.match(elements['{uniqueID}_markers_status'].textContent,/Triangulation: 2 markers/);
+fieldClient.camera={ready:true,pan_deg:30,left_rad:1,right_rad:1,range_m:4,
+    origin_base:[.04,0,.01],horizontal_fov_deg:114.6};
+const fillsBeforeFov=groundFills;
+frame();
+assert.equal(groundFills-fillsBeforeFov,3,'camera FOV sector did not render in 3D');
+assert.match(elements['{uniqueID}_markers_status'].textContent,/Camera view \(estimated\)/);
 elements['{uniqueID}_origin'].onclick();frame();
 elements['{uniqueID}_field_view'].onclick();frame();
 const beforeStale=rectangles;
+const fillsBeforeExpiry=groundFills;
+labels=[];
 now=4000; frame();assert.equal(rectangles,beforeStale,'stale cloud remained visible');
+assert(!labels.some(text=>text.startsWith('TRIANGULATION')),'stale triangulation remained drawn in 3D');
+assert.equal(groundFills-fillsBeforeExpiry,2,'stale camera FOV remained visible in 3D');
 assert(labels.includes('ID 2 · not visible'),'stale marker distance remained visible in 3D');
 assert.match(elements['{uniqueID}_status'].textContent,/ODOM STALE/);
 elements['{uniqueID}_toggle'].onclick();assert.equal(elements['{uniqueID}_panel'].hidden,true);
 elements['{uniqueID}_canvas'].isConnected=false;frame();assert.equal(Object.keys(topics).length,0);
 assert(fieldClosed,'field subscriptions were not released');
-console.log('PASS: 3D field alignment, heading, cloud formats, rendering, stale data, views and cleanup');
+console.log('PASS: 3D odometry/triangulation comparison, FOV, heading, clouds, expiry and cleanup');

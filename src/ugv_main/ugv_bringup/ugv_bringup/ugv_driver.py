@@ -24,6 +24,9 @@ class UgvDriver(Node):
             serial_port, 115200, timeout=1, write_timeout=.2)
         self.last_command, self.motion_active = None, False
         self.last_voltage_alarm = -math.inf
+        self.last_tracking_command = -math.inf
+        self.commanded_head_pub = self.create_publisher(JointState, '/ugv/pan_tilt_commanded', 10)
+        self.create_subscription(JointState, '/localization/pan_tilt_command', self.tracking_joint_callback, 1)
         self.create_timer(.05, self.check_command_timeout)
 
         # Subscribe to velocity commands (cmd_vel topic)
@@ -63,14 +66,24 @@ class UgvDriver(Node):
 
     # Callback for processing joint state updates
     def joint_states_callback(self, msg):
-        header = {
-            'stamp': {
-                'sec': msg.header.stamp.sec,
-                'nanosec': msg.header.stamp.nanosec,
-            },
-            'frame_id': msg.header.frame_id,
-        }
+        # The normal joint-state publisher continuously sends zero positions.
+        # A live localization controller owns the head until its lease expires.
+        if time.monotonic() - self.last_tracking_command < 1.0:
+            return
+        self.send_head_command(msg)
 
+    def tracking_joint_callback(self, msg):
+        if self.send_head_command(msg):
+            self.last_tracking_command = time.monotonic()
+
+    def send_head_command(self, msg):
+        try:
+            pan = msg.position[msg.name.index('pt_base_link_to_pt_link1')]
+            tilt = msg.position[msg.name.index('pt_link1_to_pt_link2')]
+        except (ValueError, IndexError):
+            return False
+        if not math.isfinite(pan) or not math.isfinite(tilt) or abs(pan) > math.pi or not -math.pi/6 <= tilt <= math.pi/2:
+            return False
         # Extract joint positions and convert to degrees
         name = msg.name
         position = msg.position
@@ -91,6 +104,10 @@ class UgvDriver(Node):
         }) + "\n"
                 
         self.ser.write(joint_data.encode())
+        # Republish only commands that really reached the serial interface.
+        msg.header.stamp = self.get_clock().now().to_msg()
+        self.commanded_head_pub.publish(msg)
+        return True
 
     # Callback for processing LED control commands
     def led_ctrl_callback(self, msg):

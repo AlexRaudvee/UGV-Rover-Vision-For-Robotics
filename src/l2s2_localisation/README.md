@@ -25,8 +25,12 @@ corners are undistorted before passing them to AprilTag pose estimation.
 The camera translation is transformed to the robot centre using the existing
 camera mount and the most recent commanded pan/tilt angles at image exposure.
 The head has no measured angle feedback; these angles are assumed commands.
-Initially, the node assumes the head is centred. Frames during head settling are
-excluded. No camera movement is commanded by this node.
+Initially, the range reader assumes the head is centred. It follows the commands
+selected by the driver on `/ugv/pan_tilt_commanded`, rather than the normal
+joint-state publisher's repeated zeros. Frames just after abrupt head jumps are
+excluded for `head_settle_s`; smooth steps below `head_jump_threshold_deg` remain
+usable while tracking. The range reader itself does not move the camera; the
+localization launch now also starts the marker tracker described below.
 
 `/odom` is interpolated at the image timestamp, and the existing field alignment
 maps observations into field coordinates. Median filtering works on those fixed
@@ -57,10 +61,11 @@ markers:
   APRILTAG_standard41h12:3: [0.0, 0.75]
 ```
 
-These are the left/right intersections of the halfway line with the 0.75 m
+The example above shows the left/right intersections of the halfway line with the 0.75 m
 centre circle. The ID assignment follows the current camera observation:
 **ID 3 left, ID 2 right**, facing the centre from the negative-x penalty mark.
-Swap the entries if the physical IDs are installed the other way round.
+The actual editable map may contain other positions and IDs; it is preserved.
+Use the coordinates of your actual tags, and set `target_ids` separately for tracking.
 Two-coordinate map entries denote ground-reference locations; display icons are
 schematic landmarks, not measured tag heights. `observed_position_m` separately
 reports the measured tag centre in 3D.
@@ -108,7 +113,7 @@ Useful JSON fields include `range_m`, `camera_distance_m`, `range_std_m`,
 `range_std_m` describes recent scatter; it is not a calibrated accuracy bound.
 
 The daily rover launch starts this automatically (`marker_ranges:=false`
-disables it). To start only the range reader alongside an existing detector:
+disables it). To start ranges and tracking alongside an existing detector and base driver:
 
 ```bash
 ros2 launch l2s2_localisation marker_ranges.launch.py \
@@ -128,6 +133,137 @@ ros2 topic echo /marker_ranges/result --once --full-length
 
 After deploying dashboard changes, hard-refresh Vizanti with Ctrl+Shift+R.
 
+## Smooth camera tracking during localization
+
+`marker_ranges.launch.py` starts `marker_pan_tracker` by default. The daily rover
+launch includes it, and stopping that localization launch stops tracking.
+`pan_tracking:=false` disables just tracking; `marker_ranges:=false` in the daily
+launch disables both ranges and tracking. Detection alone does not move the head.
+Disable tracking before using the separate scanner or manually controlling the head.
+
+The tracker accepts a list of allowed tag IDs, initially all six field markers
+**0, 1, 2, 3, 4, 5**. Any two or more visible targets can drive tracking; the
+other configured tags need not be visible. It converts image positions to angular
+bearings with the matching raw/rectified calibration, compensates for pan at
+image exposure, and filters each tag separately. It pans toward the midpoint of
+the leftmost and rightmost retained bearings to center the entire group. This
+avoids a cluster of tags on one side pulling the camera away from the farthest
+tag on the other side. A deadband suppresses small changes; the pan setpoint
+advances at most 8 degrees/second at 20 Hz. Tilt stays at the configured angle.
+
+A target survives two consecutive missing frames and is discarded on the third.
+Reappearance resets its counter. Tracking continues while at least two targets
+are retained. Losing one of three or more does not force a return to zero.
+With fewer than two, the camera smoothly returns to pan 0, even if one
+tag remains visible. The configurable observation timeout also handles a stopped
+detector. Stale/duplicate frames do not refresh tracks, and decoder quality
+checks reject weak IDs. All tags cannot stay visible when they are farther
+apart than the camera's view or outside its pan limits.
+
+Edit **`config/pan_tracking.yaml`** and restart localization:
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `target_ids` | `[0, 1, 2, 3, 4, 5]` | Allowed physical tag IDs; any two or more can drive tracking |
+| `missing_frames` | `3` | Consecutive missed frames before losing a target |
+| `detection_timeout_s` | `1` | Maximum time without a usable observation |
+| `max_speed_deg_s` | `8.0` | Pan setpoint rate, tracking and returning |
+| `deadband_deg` | `3.0` | Ignore small angular errors |
+| `smoothing_alpha` | `0.25` | Smaller values smooth more, with more delay |
+| `gain` | `0.7` | Fraction of filtered error used for each target |
+| `max_pan_deg` | `120.0` | Limit either side of forward |
+| `tilt_deg` | `0.0` | Fixed tilt; positive looks up |
+| `horizontal_fov_deg` | `0.0` | Zero uses calibration; positive overrides it |
+| `fov_range_m` | `4.0` | Sector drawing length, not a detection range limit |
+
+`start_rover.sh` supplies this source YAML, so later parameter edits need a
+restart but no build. Range sizes and marker map settings still reload live.
+The initial deployment requires rebuilding `l2s2_localisation`, `ugv_bringup`,
+`ugv_description`, and `vizanti_server`; `bash start_rover.sh --build` includes
+all four. To run a full session with ranging but no tracking:
+
+```bash
+bash start_rover.sh pan_tracking:=false
+```
+
+The driver gives `/localization/pan_tilt_command` priority over normal joint
+commands while the tracker publishes. `/ugv/pan_tilt_commanded` reports selected
+commands to ranging and the physical rover's robot state publisher. A one-second
+lease restores normal control if tracking stops. The tracker waits for the
+driver's selected angle before taking over, so it can begin from an already
+turned position. The speed limit applies while tracking is active; the ordinary
+controller resumes after it stops. This is commanded position, not measured
+encoder feedback or a mechanical zero calibration.
+
+Both Vizanti **Football Field (2D)** and **Rover + Depth (3D)** show a translucent
+blue horizontal viewing sector anchored to the robot. It turns with robot yaw
+and camera pan. The nominal rectified horizontal FOV is about **117 degrees**,
+derived from `ugv_vision/config/camera_info.yaml`'s projection matrix; valid live
+CameraInfo updates take precedence. Override `horizontal_fov_deg` if the usable
+image is narrower. The sector is drawn on the floor; it is not a full 3D frustum
+or a visibility guarantee. Occlusion, black rectification borders, tilt, and tag
+resolution can reduce usable coverage. The display is marked estimated because
+there is no measured servo feedback. It disappears when tracker state or field
+odometry becomes stale. Hard-refresh Vizanti after rebuilding; no extra widget
+is required.
+
+```bash
+ros2 topic echo /marker_pan_tracker/state --once
+ros2 topic echo /ugv/pan_tilt_commanded --once
+```
+
+Tracker state includes `tracked_ids` (including tags briefly retained through
+dropouts) and `mode: tracking_markers` or `centering`. Vizanti displays the number
+of retained tags while tracking. Extend `target_ids` when adding another field
+marker; its known coordinates remain configured separately in `marker_map.yaml`.
+
+## Live triangulation beside odometry
+
+The localization launch now starts `marker_triangulation` automatically.
+It estimates map x/y from any **two or more known tags in the same image**,
+using the existing AprilTag distances and `config/marker_map.yaml`. Two-circle
+intersections give two candidate positions. Field bounds and the camera's
+pan-corrected bearings reject the mirrored solution. With more tags, range-only
+least squares uses all accepted distances. Ambiguous, inconsistent or poorly
+constrained observations produce an explicit rejection instead of a guessed fix.
+
+Triangulation receives a new `/marker_ranges/observations` stream containing
+measurements **before** odometry-based display filtering. The odometry position
+is used only for comparison and is never an input to the position solver.
+No odometry fusion, TF correction, robot-start change, or driving is performed.
+
+Both Vizanti views now display **amber ODOM** and **magenta TRIANGULATION**
+positions, labels and a comparison line. The status gives the number of tags
+used and the separation from odometry at the image timestamp. The ordinary
+odometry rover remains at its current position. Rejected or stale triangulation
+markers disappear, with the rejection reason in the status.
+
+| Topic | Contents |
+|---|---|
+| `/marker_ranges/observations` | Same-image native ranges/bearings and known coordinates |
+| `/marker_triangulation/result` | JSON fix, candidates, quality and odometry comparison |
+| `/marker_triangulation/pose` | New accepted `PoseWithCovarianceStamped` measurements in `map` |
+
+Edit `config/triangulation.yaml` for freshness, range/bearing consistency,
+ambiguity and geometry thresholds. Its source file reloads once per second when
+started through `start_rover.sh`. Marker positions and field bounds remain in
+`config/marker_map.yaml` and also reload live. Configuration changes invalidate
+the prior fix until another image arrives. Pose covariance is approximate and
+requires validation before future fusion with odometry.
+
+After rebuilding, use `bash start_rover.sh` and hard-refresh Vizanti. To disable
+just triangulation, pass `triangulation:=false`. `marker_ranges:=false` disables
+the complete live localization group, including triangulation and pan tracking.
+
+```bash
+ros2 topic echo /marker_triangulation/result --once --full-length
+ros2 topic echo /marker_triangulation/pose --once
+```
+
+The derivation, equations, mirror-removal example, solver details, assumptions
+and output definitions are in [docs/triangulation.md](docs/triangulation.md),
+ready to use as the basis for the lab report.
+
 ## Pan-tilt scan and localization
 
 The existing scanner remains available separately:
@@ -146,7 +282,7 @@ localization step remains separate.
 In the sourced ROS container:
 
 ```bash
-export PYTHONPATH=src/l2s2_localisation:src/l2s1_marker_detection:$PYTHONPATH
+export PYTHONPATH=src/l2s2_localisation:src/l2s1_marker_detection:src/ugv_main/ugv_bringup:$PYTHONPATH
 python3 -m pytest -q src/l2s2_localisation/test
 python3 -m pytest -q src/l2s1_marker_detection/test
 node scripts/test_vizanti_field.cjs
@@ -157,3 +293,13 @@ The range integration tests use isolated ROS domain **95**, synthetic detections
 and temporary configs. They verify that deliberately incorrect map coordinates
 cannot change the measured distance, and test staleness, decoder rejection,
 camera rectification, scaling, motion compensation and filter reset behavior.
+The tracker tests use isolated domain **94** and a fake serial connection, never
+the physical head. They cover dropout grace, bounded movement, timeout, exposure
+angles, command arbitration, calibration FOV and smooth-motion ranging. Browser
+tests cover FOV rotation, placement, expiration and rendering in both views.
+Live triangulation integration tests use domain **92** and synthetic camera
+corners. They recover position with a turned camera despite deliberately wrong
+odometry, operate without odometry, and test stale/insufficient measurements and
+configuration changes. Pure solver tests cover mirror ambiguity, noisy ranges,
+2–6 markers, collinear layouts and invalid geometry. Browser tests verify both
+pose labels, comparison output, rejected-fix hiding and expiration.

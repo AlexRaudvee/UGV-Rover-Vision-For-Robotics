@@ -25,6 +25,8 @@ tilt_sign: 1.0
 initial_pan_deg: 0.0
 initial_tilt_deg: 0.0
 head_settle_s: 0.5
+# Reject frames after abrupt head jumps; small tracking steps use their exposure-time angle.
+head_jump_threshold_deg: 5.0
 pan_pivot_xy: [-0.008, 0.0]
 tilt_axis_height: 0.211
 camera_offset: 0.048

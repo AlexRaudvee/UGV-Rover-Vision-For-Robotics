@@ -138,6 +138,14 @@ function render() {
             }
         }
     }
+    const fov = layout ? field.cameraFov : [];
+    const projectedFov = fov.map(project);
+    if (projectedFov.length && projectedFov.every(Boolean)) {
+        ctx.beginPath();
+        projectedFov.forEach((p,i) => i ? ctx.lineTo(p[0],p[1]) : ctx.moveTo(p[0],p[1]));
+        ctx.closePath(); ctx.fillStyle = 'rgba(80,180,255,0.16)'; ctx.fill();
+    }
+    for (let i=1; i<fov.length; i++) line(fov[i-1],fov[i],'#50b4ff',1.5);
     line([0,0,0],[1,0,0],'#5ee89c',3); line([0,0,0],[0,1,0],'#5ee89c',3);
     line([0,0,0],[0,0,1],'#5ee89c',3);
     const start = field.state?.start;
@@ -169,6 +177,19 @@ function render() {
             ctx.fillText(marker.text,label[0]+8,label[1]-8);
         }
     }
+    const triangulated = layout ? field.triangulationVisual : null;
+    if (triangulated) {
+        const [x,y] = triangulated.position, z=.035, color=triangulated.color;
+        const ring=[];
+        for (let i=0;i<=32;i++) ring.push([x+.18*Math.cos(i*Math.PI/16),y+.18*Math.sin(i*Math.PI/16),z]);
+        for (let i=1;i<ring.length;i++) line(ring[i-1],ring[i],color,3);
+        line([x-.13,y,z],[x+.13,y,z],color,2); line([x,y-.13,z],[x,y+.13,z],color,2);
+        if (triangulated.heading !== null) line([x,y,z],
+            [x+.45*Math.cos(triangulated.heading),y+.45*Math.sin(triangulated.heading),z],color,3);
+        if (triangulated.odom) line(triangulated.odom,[x,y,z],color,1.5);
+        const label=project([x,y,.4]);
+        if (label) { ctx.fillStyle=color; ctx.font='bold 13px sans-serif'; ctx.fillText(triangulated.text,label[0]+8,label[1]+16); }
+    }
     if(displayRobot) {
         const r=displayRobot;
         const body=(x,y,z)=>[r.x+Math.cos(r.yaw)*x-Math.sin(r.yaw)*y,r.y+Math.sin(r.yaw)*x+Math.cos(r.yaw)*y,z];
@@ -180,11 +201,16 @@ function render() {
         box(0,0,.07,.16,.11,.14,'#f7c76b');
         for(const x of [-.11,.11]) for(const y of [-.14,.14]) box(x,y,0,.055,.035,.11,'#a4b2be');
         line(body(0,0,.23),body(.30,0,.23),'#ff956d',3);
+        const label=project(body(0,0,.32));
+        if (label) {
+            ctx.fillStyle='#f7c76b'; ctx.font='bold 13px sans-serif';
+            ctx.fillText(`ODOM (${r.x.toFixed(2)}, ${r.y.toFixed(2)})`,label[0]+8,label[1]-8);
+        }
     }
     const now=performance.now(), odomFresh=lastOdom && now-lastOdom<1000;
     const state=displayRobot ? `x ${displayRobot.x.toFixed(2)} m · y ${displayRobot.y.toFixed(2)} m · yaw ${(Math.atan2(Math.sin(displayRobot.yaw),Math.cos(displayRobot.yaw))*180/Math.PI).toFixed(1)}°` : 'Waiting for /odom or start alignment';
     el('mode').textContent = layout ? `3D · ${layout.frame_id} · SPL field` : '3D · odom';
-    el('markers_status').textContent = field.rangeStatus;
+    el('markers_status').textContent = [field.rangeStatus, field.cameraStatus, field.localizationStatus].filter(Boolean).join(' · ');
     const inputState=health && now-health.time<2000 ? (health.level ? health.text : 'estimation inputs fresh') : 'input health unavailable';
     el('status').textContent=`${state}${odomFresh?'':' · ODOM STALE'}${layout && !field.connected?' · FIELD SERVER STALE':''} · ${lastCloud && now-lastCloud<1000?`${points.length} depth points · delay ${Math.max(0, previousStamp-cloudStamp).toFixed(1)} s`:(cloudError || 'depth unavailable/stale')} · ${inputState}`;
 }

@@ -13,6 +13,7 @@ setup(
         ('share/' + package_name, ['package.xml', 'README.md', 'LICENSE']),
         ('share/' + package_name + '/launch', glob('launch/*.launch.py')),
         ('share/' + package_name + '/config', glob('config/*.yaml')),
+        ('share/' + package_name + '/docs', glob('docs/*.md')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,6 +26,8 @@ setup(
         'console_scripts': [
             'scanner = l2s2_localisation.scanner_node:main',
             'ranges = l2s2_localisation.range_node:main',
+            'pan_tracker = l2s2_localisation.pan_tracker_node:main',
+            'triangulation = l2s2_localisation.triangulation_node:main',
         ],
     },
 )

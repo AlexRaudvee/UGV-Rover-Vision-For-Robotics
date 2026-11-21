@@ -60,6 +60,7 @@ def launch_setup(context, *args, **kwargs):
         package='robot_state_publisher',
         executable='robot_state_publisher',
         namespace='ugv',
+        remappings=[('joint_states', LaunchConfiguration('joint_state_topic'))],
         arguments=[urdf_model_path]
     )
 
@@ -107,6 +108,7 @@ def launch_setup(context, *args, **kwargs):
 # Function to generate the launch description with configurable arguments
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument('joint_state_topic', default_value='joint_states'),
         # Argument to specify whether to use the joint_state_publisher GUI
         DeclareLaunchArgument('use_joint_state_publisher_gui', default_value='false', description='Whether to launch joint_state_publisher GUI'),
         # Argument to specify whether to use RViz

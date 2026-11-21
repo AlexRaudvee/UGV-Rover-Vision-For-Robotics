@@ -2,6 +2,7 @@
 
 from collections import deque
 import json
+import hashlib
 import math
 from pathlib import Path
 import time
@@ -28,9 +29,11 @@ def load_config(path):
     config = yaml.safe_load(Path(path).read_text())
     if not isinstance(config, dict):
         raise ValueError('marker range configuration must be a mapping')
+    config.setdefault('head_jump_threshold_deg', 5.0)
     for key in ('marker_size_m', 'image_max_age_s', 'stale_after_s', 'filter_window_s',
                 'min_side_px', 'low_resolution_px', 'max_reprojection_error_px',
-                'min_decision_margin', 'max_range_m', 'odom_max_skew_s', 'head_settle_s'):
+                'min_decision_margin', 'max_range_m', 'odom_max_skew_s', 'head_settle_s',
+                'head_jump_threshold_deg'):
         if isinstance(config[key], bool) or not math.isfinite(config[key]) or config[key] <= 0:
             raise ValueError(f'{key} must be a positive finite number')
     if not isinstance(config['filter_samples'], int) or not 1 <= config['filter_samples'] <= 99:
@@ -65,6 +68,7 @@ def load_config(path):
                     raise ValueError(f'{label} must have finite field x,y[,z] coordinates')
                 output[label] = [float(v) for v in value] + ([0.0] if len(value) == 2 else [])
         return output
+    world = {}
     marker_map = config.get('marker_map_file')
     if marker_map:
         marker_map = Path(marker_map).expanduser()
@@ -78,6 +82,14 @@ def load_config(path):
     else:
         config['markers'] = entries(config.get('markers'))
     config['marker_sizes'] = entries(config.get('marker_sizes'), sizes=True)
+    dimensions = world.get('field', config.get('field', {}))
+    if not isinstance(dimensions, dict):
+        raise ValueError('field dimensions must be a mapping')
+    config['field'] = {key: dimensions.get(key, default) for key, default in
+                       (('half_length', 4.5), ('half_width', 3.0), ('border', .7))}
+    if any(isinstance(v, bool) or not math.isfinite(v) or v < 0 or
+           (key != 'border' and v == 0) for key, v in config['field'].items()):
+        raise ValueError('invalid field dimensions')
     return config
 
 
@@ -106,13 +118,16 @@ class MarkerRanges(Node):
         self.last_image_stamp = None
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.result_pub = self.create_publisher(String, '~/result', latched)
+        # Independent, synchronized inputs for live triangulation. No odometry
+        # filtering and no pooling measurements from different image times.
+        self.observations_pub = self.create_publisher(String, '~/observations', 1)
         self.markers_pub = self.create_publisher(MarkerArray, '~/markers', latched)
         self.create_subscription(String, self.config['detections_topic'], self.on_detections, 1)
         self.create_subscription(CameraInfo, self.config['camera_info_topic'], self.on_camera,
                                  qos_profile_sensor_data)
         self.create_subscription(String, '/football_field/state', self.on_field, 10)
         self.create_subscription(Odometry, '/odom', self.on_odom, qos_profile_sensor_data)
-        self.create_subscription(JointState, '/ugv/joint_states', self.on_joints, 10)
+        self.create_subscription(JointState, '/ugv/pan_tilt_commanded', self.on_joints, 10)
         self.create_timer(.1, self.publish)
         self.create_timer(1.0, self.reload_config)
         self.get_logger().info(f'AprilTag ranges from {self.config["detections_topic"]}; config {self.path}')
@@ -181,7 +196,9 @@ class MarkerRanges(Node):
                 stamp = self.now()
             if self.commands and stamp < self.commands[-1][0]:
                 self.commands.clear()
-            changed = not self.commands or abs(pan-self.commands[-1][1]) + abs(tilt-self.commands[-1][2]) > .01
+            # Small, rate-limited tracking steps remain usable while moving.
+            # Only abrupt commands (manual positioning/scanning) need settling.
+            changed = not self.commands or abs(pan-self.commands[-1][1]) + abs(tilt-self.commands[-1][2]) > math.radians(self.config['head_jump_threshold_deg'])
             moved = stamp if changed else self.commands[-1][3]
             self.commands.append((stamp, pan, tilt, moved))
         except (ValueError, IndexError):
@@ -203,6 +220,7 @@ class MarkerRanges(Node):
         return planar_pose(field['transform'], pose) if pose is not None else None
 
     def on_detections(self, message):
+        observations, stamp = [], None
         try:
             data = json.loads(message.data)
             self.last_received = time.monotonic()
@@ -237,6 +255,13 @@ class MarkerRanges(Node):
                     observation = observe_tag(item, size, camera, (data['width'], data['height']),
                                                self.mount, pan, tilt, self.config)
                     point = observation['position']
+                    if label in self.config['markers']:
+                        observations.append({
+                            'label': label, 'family': item['family'], 'id': int(item['id']),
+                            'known_position_m': self.config['markers'][label],
+                            'range_m': float(math.hypot(point[0], point[1])),
+                            'bearing_deg': math.degrees(math.atan2(point[1], point[0])),
+                            'position_base_m': point.tolist(), 'side_px': observation['side_px']})
                     frame = 'base'
                     if robot is not None:
                         point = base_to_map(point, robot)
@@ -268,8 +293,22 @@ class MarkerRanges(Node):
                 except (ValueError, KeyError, TypeError, ImportError, cv2.error) as error:
                     self.rejections[label] = str(error)
             self.error = ''
+            self.publish_observations(stamp, observations, robot=robot)
         except (ValueError, KeyError, TypeError, ImportError, cv2.error) as error:
             self.error = str(error)
+            self.publish_observations(stamp, [], error=self.error)
+
+    def publish_observations(self, stamp, observations, robot=None, error=''):
+        world = {'markers': self.config['markers'], 'field': self.config['field']}
+        revision = hashlib.sha256(json.dumps(world, sort_keys=True).encode()).hexdigest()[:16]
+        result = {'stamp': stamp if stamp is not None and math.isfinite(stamp) else self.now(),
+                  'frame_id': (self.field or {}).get('frame_id', 'map'),
+                  'field_revision': (self.field or {}).get('revision'),
+                  'map_revision': revision, 'field': self.config['field'],
+                  'source': 'same-image AprilTag ranges before odometry filtering',
+                  'error': self.config_error or error, 'observations': observations,
+                  'odom_pose': list(robot) if robot is not None else None}
+        self.observations_pub.publish(String(data=json.dumps(result, allow_nan=False)))
 
     def reload_config(self):
         try:
@@ -287,6 +326,7 @@ class MarkerRanges(Node):
             self.records.clear()
             self.commands.clear()
             self.config_error = ''
+            self.publish_observations(None, [], error='configuration changed; waiting for a new image')
         except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as error:
             self.config_error = f'Range config not loaded: {error}'
 

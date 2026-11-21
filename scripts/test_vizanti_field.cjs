@@ -32,21 +32,45 @@ const state=vm.createContext({mocks,console,performance:{now:()=>now},
     },ServiceRequest:class {constructor(values){Object.assign(this,values);}}}});
 const moduleSource=fs.readFileSync(base+'js/modules/football_field.js','utf8')
     .replace(/^import .*$/m,'const {rosbridge}=mocks;').replace(/export /g,'');
-    vm.runInContext(`Object.assign(mocks,(()=>{${moduleSource};return {FieldClient,transformFieldPoint,markerVisuals};})());`,state);
+    vm.runInContext(`Object.assign(mocks,(()=>{${moduleSource};return {FieldClient,transformFieldPoint,markerVisuals,cameraFov,triangulationVisual};})());`,state);
 const source=fs.readFileSync(base+'templates/footballfield/footballfield_script.js','utf8')
     .replace(/^const (\{.*\}) = await import.*$/gm,'const $1 = mocks;');
 vm.runInContext(source,state);
 listeners['/football_field/layout']({data:JSON.stringify({frame_id:'map',length_m:9,width_m:6,border_m:.7,
     ground_color:'#28753c',ground:[[-5.2,-3.7,0],[5.2,-3.7,0],[5.2,3.7,0],[-5.2,3.7,0]],
     lines:[{points:[[-4.5,-3,0],[4.5,-3,0]],color:'#fff',width_m:.05}]})});
-const fieldState={config_file:'/workspace/football_field.yaml',aligned:true,odom_fresh:true,publish_tf:true,revision:2,
+const fieldState={config_file:'/workspace/football_field.yaml',frame_id:'map',robot:[-3.2,0,0],aligned:true,odom_fresh:true,publish_tf:true,revision:2,
     start:{start_x_m:-3.2,start_y_m:0,start_heading_deg:0},error:''};
 listeners['/football_field/state']({data:JSON.stringify(fieldState)});
 const ranges={frame_id:'map',field_revision:2,stream_fresh:true,error:'',markers:[{
     id:2,map_position_m:[0,-.75,0],robot_position_m:[-3.2,0,0],range_m:3.286,
     fresh:true,low_resolution:true,samples:5}]};
 listeners['/marker_ranges/result']({data:JSON.stringify(ranges)});
+const camera={ready:true,pan_deg:90,left_rad:Math.PI/4,right_rad:Math.PI/4,
+    origin_base:[.04,0,.01],range_m:4,horizontal_fov_deg:90,mode:'tracking_markers',tracked_ids:[0,4,5]};
+listeners['/marker_pan_tracker/state']({data:JSON.stringify(camera)});
+const fix={fresh:true,frame_id:'map',field_revision:2,position_m:[-2.9,.2,0],heading_deg:15,
+    odom_position_m:[-3.2,0,0],position_delta_m:.36,age_s:.1,stale_after_s:1,used_ids:['tag:0','tag:5']};
+listeners['/marker_triangulation/result']({data:JSON.stringify(fix)});
 frame(1000);
+assert(drawn.some(d=>d[0]==='fillText' && d[1]==='ODOM (-3.20, 0.00)'),'live odometry marker missing in 2D');
+assert(drawn.some(d=>d[0]==='fillText' && d[1]==='TRIANGULATION (-2.90, 0.20)'),
+    'independent triangulation marker missing in 2D');
+assert.match(elements['{uniqueID}_markers_status'].textContent,/Δ odometry 0.36 m/);
+assert.equal(mocks.triangulationVisual(fix,1,2,'map'),null,'expired triangulation remained live');
+assert.equal(mocks.triangulationVisual(fix,0,3,'map'),null,'old start revision retained a comparison');
+assert.equal(mocks.triangulationVisual(fix,0,2,'odom'),null,'triangulation used the wrong frame');
+assert.equal(mocks.triangulationVisual({...fix,fresh:false},0,2,'map'),null,'rejected fix remained visible');
+assert(drawn.some(d=>d[0]==='moveTo' && Math.abs(d[1]-342)<1e-9 && d[2]===400),'camera FOV origin is wrong');
+assert.match(elements['{uniqueID}_markers_status'].textContent,/Camera view \(estimated\) 90°/);
+assert.match(elements['{uniqueID}_markers_status'].textContent,/tracking 3 tags/);
+const wedge=mocks.cameraFov(camera,{...fieldState,robot:[1,2,Math.PI/2]},0);
+assert.equal(wedge.length,27);
+assert(Math.abs(wedge[13][0]+3)<1e-12 && Math.abs(wedge[13][1]-2.04)<1e-12,
+    'FOV failed to combine robot yaw and camera pan');
+assert.equal(mocks.cameraFov(camera,fieldState,2).length,0,'stale camera FOV remained visible');
+assert.equal(mocks.cameraFov(camera,{...fieldState,odom_fresh:false},0).length,0,'FOV used stale robot pose');
+assert.equal(mocks.cameraFov({...camera,ready:false},fieldState,0).length,0);
 assert(drawn.some(d=>d[0]==='moveTo' && d[1]===240 && d[2]===585),'carpet scale/origin is wrong');
 assert(drawn.some(d=>d[0]==='fillText' && d[1]==='START (-3.20, 0.00)'),'start label missing');
 assert(drawn.some(d=>d[0]==='fillText' && d[1]==='ID 2 · ~3.3 m'),'measured AprilTag distance missing in 2D');
@@ -63,6 +87,11 @@ assert.equal(elements['{uniqueID}_save_start'].disabled,false);
 const mapped=mocks.transformFieldPoint([2,-1,Math.PI/2],[1,2,3]);
 assert(Math.abs(mapped[0])<1e-12 && Math.abs(mapped[1])<1e-12 && mapped[2]===3);
 async function main(){
+    drawn.length=0;
+    listeners['/marker_triangulation/result']({data:JSON.stringify({...fix,fresh:false,error:'need at least two markers'})});
+    frame(1100);
+    assert(!drawn.some(d=>d[0]==='fillText' && d[1].startsWith('TRIANGULATION')),'invalidated fix remained drawn');
+    assert.match(elements['{uniqueID}_markers_status'].textContent,/need at least two markers/);
     const input=elements['{uniqueID}_start_x_m']; input.value='1.25';input.input();
     listeners['/football_field/state']({data:JSON.stringify(fieldState)});
     assert.equal(input.value,'1.25','live updates overwrote an edited input');
@@ -105,6 +134,6 @@ async function main(){
     assert(migration.result.navbar.some(w=>w.id==='my_grid'));
     vm.runInContext('globalThis.reload = new Settings();',migration);
     assert.equal(migration.reload.navbar.filter(w=>w.id==='football_field').length,1);
-    console.log('PASS: 2D field scale, shared alignment, persistent-pose service, input editing, stale data and cleanup');
+    console.log('PASS: 2D odometry/triangulation comparison, FOV, alignment, controls, expiry and cleanup');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

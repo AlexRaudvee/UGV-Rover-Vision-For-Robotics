@@ -1,0 +1,15 @@
+# Live triangulation is separate from odometry and never publishes TF.
+# start_rover.sh passes this source file; valid edits reload once a second.
+observations_topic: /marker_ranges/observations
+max_image_age_s: 1.0
+stale_after_s: 1.0
+min_baseline_m: 0.3
+max_range_rms_m: 0.5
+max_bearing_rms_deg: 12.0
+# Near-equal range fits require bearings to choose clearly between the branches.
+ambiguity_range_margin_m: 0.05
+ambiguity_bearing_margin_deg: 3.0
+# Reject geometry where ranges barely constrain one direction.
+min_geometry_ratio: 0.02
+# Assumed range noise for approximate covariance, not calibrated accuracy.
+range_sigma_m: 0.15

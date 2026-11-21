@@ -45,6 +45,7 @@ def generate_launch_description():
         launch_arguments={
             'use_rviz': LaunchConfiguration('use_rviz'),
             'rviz_config': LaunchConfiguration('rviz_config'),
+            'joint_state_topic': '/ugv/pan_tilt_commanded',
         }.items()
     ) 
     # Define the nodes to be launched                                     

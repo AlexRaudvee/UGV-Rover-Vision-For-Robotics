@@ -44,6 +44,14 @@ def generate_launch_description():
                               description='Measure AprilTag distances and display them on the field'),
         DeclareLaunchArgument('marker_range_config', default_value=os.path.join(
             get_package_share_directory('l2s2_localisation'), 'config', 'marker_ranges.yaml')),
+        DeclareLaunchArgument('pan_tracking', default_value='true',
+                              description='Smoothly pan to keep visible localization tags in view'),
+        DeclareLaunchArgument('triangulation', default_value='true',
+                              description='Show a separate AprilTag position estimate beside odometry'),
+        DeclareLaunchArgument('triangulation_config', default_value=os.path.join(
+            get_package_share_directory('l2s2_localisation'), 'config', 'triangulation.yaml')),
+        DeclareLaunchArgument('pan_tracking_config', default_value=os.path.join(
+            get_package_share_directory('l2s2_localisation'), 'config', 'pan_tracking.yaml')),
         DeclareLaunchArgument('usb_camera', default_value='true'),
         DeclareLaunchArgument('oak_camera', default_value='true'),
         DeclareLaunchArgument('vizanti', default_value='true'),
@@ -76,7 +84,11 @@ def generate_launch_description():
         include('l2s1_marker_detection', 'marker_detection.launch.py', 'markers',
                 preset=LaunchConfiguration('marker_preset')),
         include('l2s2_localisation', 'marker_ranges.launch.py', 'marker_ranges',
-                marker_range_config=LaunchConfiguration('marker_range_config')),
+                marker_range_config=LaunchConfiguration('marker_range_config'),
+                triangulation=LaunchConfiguration('triangulation'),
+                triangulation_config=LaunchConfiguration('triangulation_config'),
+                pan_tracking=LaunchConfiguration('pan_tracking'),
+                pan_tracking_config=LaunchConfiguration('pan_tracking_config')),
         include('ugv_vision', 'oak_d_lite.launch.py', 'oak_camera'),
         Node(package='ugv_vision', executable='depth_cloud', name='depth_cloud',
              condition=IfCondition(LaunchConfiguration('depth_3d')),
