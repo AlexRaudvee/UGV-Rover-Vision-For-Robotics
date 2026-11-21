@@ -1,6 +1,6 @@
-"""Drive the rover with a game controller plugged into the LAPTOP.
+"""Drive the rover and move its camera with a game controller plugged into the LAPTOP.
 
-Sends /cmd_vel to the rover through Vizanti's rosbridge (port 5001), so the
+Sends commands to the rover through Vizanti's rosbridge (port 5001), so the
 laptop needs no ROS. The rover session (start_rover.sh) must be running.
 
     <venv python> gamepad_drive.py            drive
@@ -8,8 +8,10 @@ laptop needs no ROS. The rover session (start_rover.sh) must be running.
 
 Xbox 360 layout:
     hold LB         enable driving (let go = stop)
-    left stick      forward / backward
-    right stick     turn left / right
+    left stick      up/down = forward/backward, left/right = turn
+    right stick     move the camera: left/right = pan, up/down = tilt
+                    (no LB needed; automatic camera tracking resumes 3 s after you let go)
+    Y               camera back to straight ahead
     B               emergency stop (let go of LB, then hold it again to continue)
     Back            quit
 """
@@ -26,11 +28,16 @@ ROVER = '10.0.80.4'
 PORT = 5001
 MAX_SPEED = 0.20           # m/s
 MAX_TURN = 1.5             # rad/s commanded (the rover turns at about 1/3 of this)
+PAN_RATE, TILT_RATE = 60.0, 40.0        # deg/s at full stick
+PAN_LIMIT, TILT_MIN, TILT_MAX = 150.0, -20.0, 60.0
+PAN_SIGN, TILT_SIGN = -1.0, 1.0         # same as pan_tracking.yaml
 DEADZONE = 0.12
 RATE_HZ = 20
 
-AXIS_FORWARD, AXIS_TURN = 1, 2          # left stick Y, right stick X
-BUTTON_ENABLE, BUTTON_STOP, BUTTON_QUIT = 4, 1, 6   # LB, B, Back
+AXIS_FORWARD, AXIS_TURN = 1, 0          # left stick Y, left stick X
+AXIS_PAN, AXIS_TILT = 2, 3              # right stick X, right stick Y
+BUTTON_ENABLE, BUTTON_STOP, BUTTON_CENTER, BUTTON_QUIT = 4, 1, 3, 6   # LB, B, Y, Back
+PAN_JOINT, TILT_JOINT = 'pt_base_link_to_pt_link1', 'pt_link1_to_pt_link2'
 
 
 def shaped(value):
@@ -76,19 +83,47 @@ def main():
         sys.exit(f'Cannot reach the rover at ws://{ROVER}:{PORT}. Is start_rover.sh running '
                  'and Proton VPN off?')
     cmd = roslibpy.Topic(ros, '/cmd_vel', 'geometry_msgs/Twist')
+    camera_cmd = roslibpy.Topic(ros, '/localization/pan_tilt_manual', 'sensor_msgs/JointState')
     cmd.advertise()
+    camera_cmd.advertise()
+
+    # Current camera angles (deg, pan left positive), kept in sync with what the
+    # rover actually sends to the servos, so manual moves start from there.
+    camera = {'pan': 0.0, 'tilt': 0.0, 'manual_until': 0.0}
+
+    def on_commanded(message):
+        if time.monotonic() < camera['manual_until']:
+            return                                   # we are steering: keep our own values
+        try:
+            names = message['name']
+            camera['pan'] = math.degrees(message['position'][names.index(PAN_JOINT)]) / PAN_SIGN
+            camera['tilt'] = math.degrees(message['position'][names.index(TILT_JOINT)]) / TILT_SIGN
+        except (KeyError, ValueError, IndexError):
+            pass
+
+    roslibpy.Topic(ros, '/ugv/pan_tilt_commanded', 'sensor_msgs/JointState').subscribe(on_commanded)
 
     def send(v, w):
         cmd.publish(roslibpy.Message({'linear': {'x': v, 'y': 0.0, 'z': 0.0},
                                       'angular': {'x': 0.0, 'y': 0.0, 'z': w}}))
 
-    print('Connected. Hold LB to drive, B = stop, Back = quit.')
+    def send_camera():
+        camera_cmd.publish(roslibpy.Message({
+            'header': {'stamp': {'sec': 0, 'nanosec': 0}, 'frame_id': ''},
+            'name': [PAN_JOINT, TILT_JOINT],
+            'position': [PAN_SIGN * math.radians(camera['pan']), TILT_SIGN * math.radians(camera['tilt'])],
+            'velocity': [], 'effort': []}))
+
+    print('Connected. Hold LB to drive, right stick = camera, Y = camera centre, B = stop, Back = quit.')
     stopped, was_driving = False, False
+    dt = 1.0 / RATE_HZ
     try:
         while ros.is_connected:
             pygame.event.pump()
             if pad.get_button(BUTTON_QUIT):
                 break
+
+            # ---- wheels
             enable = pad.get_button(BUTTON_ENABLE)
             if pad.get_button(BUTTON_STOP):
                 stopped = True
@@ -99,15 +134,30 @@ def main():
                 w = -shaped(pad.get_axis(AXIS_TURN)) * MAX_TURN
                 send(v, w)
                 was_driving = True
-                state = f'DRIVING  v={v:+.2f} m/s  w={w:+.2f} rad/s'
+                wheels = f'DRIVING v={v:+.2f} m/s w={w:+.2f} rad/s'
             else:
                 if was_driving:
                     for _ in range(5):
                         send(0.0, 0.0)
                     was_driving = False
-                state = 'STOPPED (B pressed - let go of LB)' if stopped else 'idle (hold LB to drive)'
-            print(f'\r{state:60}', end='', flush=True)
-            time.sleep(1.0 / RATE_HZ)
+                wheels = 'STOPPED (let go of LB)' if stopped else 'idle (hold LB)'
+
+            # ---- camera
+            pan_in, tilt_in = shaped(pad.get_axis(AXIS_PAN)), shaped(pad.get_axis(AXIS_TILT))
+            if pad.get_button(BUTTON_CENTER):
+                camera['pan'], camera['tilt'] = 0.0, 0.0
+                camera['manual_until'] = time.monotonic() + 0.5
+                send_camera()
+            elif pan_in or tilt_in:
+                camera['pan'] = max(-PAN_LIMIT, min(PAN_LIMIT, camera['pan'] - pan_in * PAN_RATE * dt))
+                camera['tilt'] = max(TILT_MIN, min(TILT_MAX, camera['tilt'] - tilt_in * TILT_RATE * dt))
+                camera['manual_until'] = time.monotonic() + 0.5
+                send_camera()
+            manual = time.monotonic() < camera['manual_until']
+            cam = f'camera pan {camera["pan"]:+5.0f} tilt {camera["tilt"]:+4.0f}' + (' (manual)' if manual else '')
+
+            print(f'\r{wheels:36} | {cam:40}', end='', flush=True)
+            time.sleep(dt)
     except KeyboardInterrupt:
         pass
     finally:
@@ -116,6 +166,7 @@ def main():
                 send(0.0, 0.0)
                 time.sleep(0.02)
             cmd.unadvertise()
+            camera_cmd.unadvertise()
             ros.terminate()
         print('\nStopped and disconnected.')
 
