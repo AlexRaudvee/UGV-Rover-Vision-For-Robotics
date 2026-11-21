@@ -11,7 +11,7 @@ Xbox 360 layout:
     left stick      up/down = forward/backward, left/right = turn
     right stick     move the camera: left/right = pan, up/down = tilt
                     (no RT needed; automatic camera tracking resumes 3 s after you let go)
-    B               camera back to straight ahead
+    X or B          camera back to straight ahead
     Y               emergency stop (let go of RT, then press it again to continue)
     Back            quit
 """
@@ -38,7 +38,8 @@ AXIS_FORWARD, AXIS_TURN = 1, 0          # left stick Y, left stick X
 AXIS_PAN, AXIS_TILT = 2, 3              # right stick X, right stick Y
 AXIS_ENABLE = 5                         # right trigger RT: -1 released, +1 fully pressed
 ENABLE_ABOVE = 0.0                      # RT pressed more than halfway
-BUTTON_STOP, BUTTON_CENTER, BUTTON_QUIT = 3, 1, 6   # Y, B, Back
+BUTTON_STOP, BUTTON_QUIT = 3, 6                     # Y, Back
+BUTTONS_CENTER = (1, 2)                             # B or X
 PAN_JOINT, TILT_JOINT = 'pt_base_link_to_pt_link1', 'pt_link1_to_pt_link2'
 
 
@@ -116,7 +117,7 @@ def main():
             'position': [PAN_SIGN * math.radians(camera['pan']), TILT_SIGN * math.radians(camera['tilt'])],
             'velocity': [], 'effort': []}))
 
-    print('Connected. Hold RT to drive, right stick = camera, B = camera centre, Y = stop, Back = quit.')
+    print('Connected. Hold RT to drive, right stick = camera, X/B = camera centre, Y = stop, Back = quit.')
     stopped, was_driving, armed = False, False, False
     dt = 1.0 / RATE_HZ
     try:
@@ -150,7 +151,7 @@ def main():
 
             # ---- camera
             pan_in, tilt_in = shaped(pad.get_axis(AXIS_PAN)), shaped(pad.get_axis(AXIS_TILT))
-            if pad.get_button(BUTTON_CENTER):
+            if any(pad.get_button(b) for b in BUTTONS_CENTER):
                 camera['pan'], camera['tilt'] = 0.0, 0.0
                 camera['manual_until'] = time.monotonic() + 0.5
                 send_camera()
