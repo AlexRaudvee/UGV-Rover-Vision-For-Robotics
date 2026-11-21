@@ -8,19 +8,25 @@ from sensor_msgs.msg import JointState, CameraInfo
 from l2s1_marker_detection.native_apriltag import estimate_pose
 
 SIZE = 0.14
+STEADY_S = 0.8            # only use images taken after the pan stayed the same this long
 bag = sys.argv[1]
 r = rosbag2_py.SequentialReader()
 r.open(rosbag2_py.StorageOptions(uri=bag, storage_id='sqlite3'), rosbag2_py.ConverterOptions('cdr', 'cdr'))
-pan, info, rows = None, None, collections.defaultdict(list)
+pan, pan_since, info, rows = None, None, None, collections.defaultdict(list)
 while r.has_next():
     topic, data, _ = r.read_next()
     if topic == '/ugv/pan_tilt_commanded':
         m = deserialize_message(data, JointState)
-        pan = -m.position[m.name.index('pt_base_link_to_pt_link1')]       # left positive
+        new_pan = -m.position[m.name.index('pt_base_link_to_pt_link1')]   # left positive
+        if pan is None or abs(new_pan - pan) > math.radians(0.5):
+            pan_since = m.header.stamp.sec + m.header.stamp.nanosec * 1e-9  # camera starts turning
+        pan = new_pan
     elif topic == '/camera_info' and info is None:
         info = deserialize_message(data, CameraInfo)
     elif topic == '/marker_detector/detections' and pan is not None and info is not None:
         d = json.loads(deserialize_message(data, String).data)
+        if float(d['stamp']) - pan_since < STEADY_S:
+            continue                     # camera may still be turning: pan not reliable
         geometry = d.get('image_geometry', 'rectified')
         if geometry == 'rectified':
             K = np.array(info.p).reshape(3, 4)[:, :3]; D = None
