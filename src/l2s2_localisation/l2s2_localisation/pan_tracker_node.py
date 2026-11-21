@@ -28,7 +28,7 @@ class PanTracker(Node):
                         deadband_deg=3., smoothing_alpha=.25, max_pan_deg=120., tilt_deg=0.,
                         update_rate_hz=20., pan_sign=-1., tilt_sign=1., horizontal_fov_deg=0., fov_range_m=4.,
                         max_hamming=1, min_decision_margin=20., one_marker='center',
-                        search_reach_deg=36.)
+                        search_reach_deg=36., manual_hold_s=3.)
         for name, value in defaults.items():
             # Accept YAML numbers such as `1` for second/degree settings too.
             self.declare_parameter(name, value,
@@ -59,6 +59,10 @@ class PanTracker(Node):
         self.last_head_received = None
         self.last_stamp = None
         self.last_tick = time.monotonic()
+        # Manual camera control (e.g. a game controller): commands on this topic take
+        # over the camera; tracking resumes manual_hold_s seconds after the last one.
+        self.manual = None          # (monotonic time, pan_deg, tilt_deg)
+        self.create_subscription(JointState, '/localization/pan_tilt_manual', self.on_manual, 1)
         self.pub = self.create_publisher(JointState, '/localization/pan_tilt_command', 1)
         self.state_pub = self.create_publisher(String, '~/state', 1)
         self.create_subscription(String, '/marker_detector/detections', self.on_detections, 1)
@@ -94,6 +98,16 @@ class PanTracker(Node):
             self.last_head_received = now
         except (ValueError, IndexError):
             return
+
+    def on_manual(self, message):
+        """Manual pan/tilt in joint radians, same format as /localization/pan_tilt_command."""
+        try:
+            pan = math.degrees(message.position[message.name.index('pt_base_link_to_pt_link1')])/self.p['pan_sign']
+            tilt = math.degrees(message.position[message.name.index('pt_link1_to_pt_link2')])/self.p['tilt_sign']
+        except (ValueError, IndexError):
+            return
+        if math.isfinite(pan) and math.isfinite(tilt) and abs(pan) <= 180 and -30 <= tilt <= 90:
+            self.manual = (time.monotonic(), pan, tilt)
 
     def on_detections(self, message):
         try:
@@ -137,20 +151,26 @@ class PanTracker(Node):
             self.last_tick = now
             self.state_pub.publish(String(data=json.dumps({'ready': False, 'mode': 'waiting_for_driver'})))
             return
-        pan = self.control.step(now-self.last_tick, now)
+        if self.manual and now-self.manual[0] <= self.p['manual_hold_s']:
+            _, pan, tilt = self.manual
+            self.control.pan = pan          # tracking continues from here afterwards
+            self.control.mode = 'manual'
+        else:
+            pan = self.control.step(now-self.last_tick, now)
+            tilt = self.p['tilt_deg']
         self.last_tick = now
         message = JointState()
         message.header.stamp = self.get_clock().now().to_msg()
         message.name = ['pt_base_link_to_pt_link1', 'pt_link1_to_pt_link2']
-        message.position = [self.p['pan_sign']*math.radians(pan), self.p['tilt_sign']*math.radians(self.p['tilt_deg'])]
+        message.position = [self.p['pan_sign']*math.radians(pan), self.p['tilt_sign']*math.radians(tilt)]
         self.pub.publish(message)
         camera = self.cameras[self.geometry]
         fx, cx = camera.K[0, 0], camera.K[0, 2]
         left, right = math.atan2(cx, fx), math.atan2(camera.width-cx, fx)
         if self.p['horizontal_fov_deg'] > 0:
             left = right = math.radians(self.p['horizontal_fov_deg']/2)
-        origin = MountModel().camera_center(math.radians(pan), math.radians(self.p['tilt_deg']))
-        state = dict(ready=True, pan_deg=pan, tilt_deg=self.p['tilt_deg'], mode=self.control.mode,
+        origin = MountModel().camera_center(math.radians(pan), math.radians(tilt))
+        state = dict(ready=True, pan_deg=pan, tilt_deg=tilt, mode=self.control.mode,
                      tracked_ids=self.control.tracked_ids,
                      left_rad=left, right_rad=right, range_m=self.p['fov_range_m'],
                      origin_base=[float(origin[0]), float(origin[1]), .01],

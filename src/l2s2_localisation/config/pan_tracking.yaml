@@ -27,3 +27,6 @@ marker_pan_tracker:
     # in view and swing up to search_reach_deg to each side to find a second one.
     one_marker: center
     search_reach_deg: 36.0
+    # Manual camera commands on /localization/pan_tilt_manual (e.g. the game
+    # controller) take over; automatic tracking resumes this long after the last one.
+    manual_hold_s: 3.0
