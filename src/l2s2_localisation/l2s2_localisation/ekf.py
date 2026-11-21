@@ -45,7 +45,7 @@ class MotionNoise:
 
     xy_per_m: float = 0.05          # 5 cm sideways/along per metre driven
     h_per_rad: float = 0.05         # 5 % of every turn
-    h_per_m: float = 0.02           # heading drift per metre (wheel slip), rad
+    h_per_m: float = 0.03           # heading drift per metre (wheel slip), rad (~1.7 deg)
     xy_floor: float = 0.002         # small noise even when standing still, per step
     h_floor: float = 0.001
 
@@ -59,12 +59,17 @@ def relative_motion(previous, current):
 
 class MarkerEKF:
     def __init__(self, noise=NoiseModel(), motion=MotionNoise(), gate=CHI2_2DOF_99_9,
-                 field_model=Field()):
+                 field_model=Field(), recover_after=5, recover_inflation=4.0):
         self.noise, self.motion, self.gate, self.field = noise, motion, gate, field_model
+        # Odometry worse than MotionNoise makes the filter overconfident: its gate
+        # then rejects the CORRECT markers and it never recovers. After this many
+        # rejections in a row, P is multiplied by recover_inflation to re-open the gate.
+        self.recover_after, self.recover_inflation = recover_after, recover_inflation
         self.state = None               # np.array([x, y, h]) once initialised
         self.P = None
         self.accepted = 0
         self.rejected_in_row = 0
+        self.recoveries = 0
         self.last_rejection = ''
 
     @property
@@ -136,6 +141,10 @@ class MarkerEKF:
             self.rejected_in_row += 1
             self.last_rejection = (f'{marker.label}: range off {innovation[0]:+.2f} m, bearing off '
                                    f'{math.degrees(innovation[1]):+.1f} deg (m2={distance2:.1f})')
+            if self.recover_after and self.rejected_in_row >= self.recover_after:
+                self.P = self.P * self.recover_inflation
+                self.rejected_in_row = 0
+                self.recoveries += 1
             return False, distance2
         K = self.P @ H.T @ S_inv
         self.state = self.state + K @ innovation
@@ -157,4 +166,4 @@ class MarkerEKF:
                 'sigma_x_m': round(sx, 3), 'sigma_y_m': round(sy, 3),
                 'sigma_heading_deg': round(math.degrees(sh), 2),
                 'updates_accepted': self.accepted, 'rejected_in_row': self.rejected_in_row,
-                'last_rejection': self.last_rejection}
+                'recoveries': self.recoveries, 'last_rejection': self.last_rejection}

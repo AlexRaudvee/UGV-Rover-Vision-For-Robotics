@@ -90,6 +90,57 @@ def test_outlier_is_rejected():
     assert ekf.state == pytest.approx((-2.0, 0.5, 0.2))
 
 
+def biased_drive(seed, bias_deg_per_step, visible=('m3',), **ekf_options):
+    """4 m drive; odometry has 3 % scale error and a heading bias.
+
+    Returns (EKF error, odometry-only error, ekf) at the end of the drive."""
+    rng = np.random.default_rng(seed)
+    truth = drive()
+    ekf = MarkerEKF(noise=NoiseModel(sigma_pan_deg=1.0), **ekf_options)
+    ekf.initialise_from_markers(see(truth[0], ['m2', 'm3'], rng, math.radians(1)))
+    dead = np.array(ekf.state)
+    for k in range(1, len(truth)):
+        dx, dy, dh = relative_motion(truth[k - 1], truth[k])
+        noisy = (dx * 1.03, dy, dh + math.radians(bias_deg_per_step) + rng.normal(0, 0.002))
+        ekf.predict(*noisy)
+        c, s = math.cos(dead[2]), math.sin(dead[2])
+        dead = np.array([dead[0] + c * noisy[0] - s * noisy[1],
+                         dead[1] + s * noisy[0] + c * noisy[1], wrap(dead[2] + noisy[2])])
+        if k % 5 == 0:                       # one camera frame every 10 cm driven
+            for marker in see(truth[k], visible, rng, math.radians(1)):
+                ekf.update(marker)
+    return (math.dist(ekf.state[:2], truth[-1][:2]), math.dist(dead[:2], truth[-1][:2]), ekf)
+
+
+SEEDS = range(10)
+
+
+def test_one_marker_beats_dead_reckoning():
+    """Realistic drift (1.5 deg per metre), only ONE marker ever visible."""
+    runs = [biased_drive(seed, 0.03) for seed in SEEDS]
+    ekf_errors = [r[0] for r in runs]
+    dead_errors = [r[1] for r in runs]
+    assert np.median(ekf_errors) < 0.15
+    assert np.median(ekf_errors) < 0.5 * np.median(dead_errors)
+
+
+def test_two_markers_are_better_than_one():
+    one = np.median([biased_drive(seed, 0.03)[0] for seed in SEEDS])
+    two = np.median([biased_drive(seed, 0.03, visible=('m2', 'm3'))[0] for seed in SEEDS])
+    assert two < one and two < 0.1
+
+
+def test_recovers_from_odometry_worse_than_modelled():
+    """7.5 deg per metre drift, far beyond MotionNoise: without recovery the gate
+    locks out the correct markers."""
+    runs = [biased_drive(seed, 0.15) for seed in SEEDS]
+    assert sum(r[2].recoveries for r in runs) > 0
+    recovered = np.median([r[0] for r in runs])
+    assert recovered < 0.5 * np.median([r[1] for r in runs])
+    locked = np.median([biased_drive(seed, 0.15, recover_after=0)[0] for seed in SEEDS])
+    assert recovered < locked
+
+
 def test_estimate_inside_reported_uncertainty():
     rng = np.random.default_rng(11)
     inside, runs = 0, 30
