@@ -52,7 +52,7 @@ docker exec "${exec_options[@]}" \
             python3 scripts/clean_perception_metadata.py install
             MAKEFLAGS=-j1 CMAKE_BUILD_PARALLEL_LEVEL=1 colcon build --executor sequential --packages-select \
                 usb_cam ldlidar rf2o_laser_odometry ugv_description ugv_bringup ugv_vision object_detection obstacle_detection polar_hist \
-                detection_improved obstacle_avoidance_adv l2s1_marker_detection l2s2_localisation \
+                detection_improved obstacle_avoidance_adv l2s1_marker_detection l2s2_localisation l2s3_curling \
                 vizanti_cpp vizanti_server
         fi
         source install/setup.bash

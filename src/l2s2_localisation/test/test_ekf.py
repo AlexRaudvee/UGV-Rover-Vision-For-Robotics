@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from l2s2_localisation.ekf import MarkerEKF, MotionNoise, relative_motion
+from l2s2_localisation.ekf import MarkerEKF, MotionNoise, map_to_odom, relative_motion
 from l2s2_localisation.triangulation import Landmark, wrap
 from l2s2_localisation.triangulation_advanced import NoiseModel
 
@@ -43,6 +43,18 @@ def test_relative_motion_round_trip():
     ekf.initialise(a, 0.01, 0.1)
     ekf.predict(dx, dy, dh)
     assert ekf.state == pytest.approx(b, abs=1e-9)
+
+
+@pytest.mark.parametrize('odom,map_pose', [
+    ((1., 2., .7), (-3.2, 0., 0.)),
+    ((8., -4., -3.1), (2., .5, 3.1)),
+    ((0., 0., 0.), (.4, -.2, 1.7)),
+])
+def test_map_to_odom_composes_back_to_corrected_robot_pose(odom, map_pose):
+    from l2s2_localisation.ranging import planar_pose
+    actual = planar_pose(map_to_odom(map_pose, odom), odom)
+    assert actual[:2] == pytest.approx(map_pose[:2])
+    assert wrap(actual[2]-map_pose[2]) == pytest.approx(0.)
 
 
 def test_motion_jacobian_matches_numerical_slopes():

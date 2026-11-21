@@ -3,7 +3,7 @@ import math
 
 import pytest
 
-from l2s2_localisation.path_plan import TARGETS, PathPlanner, along_and_offset, line_points
+from l2s3_curling.path_plan import TARGETS, PathPlanner, along_and_offset, line_points
 
 
 def test_targets_match_assignment_table():

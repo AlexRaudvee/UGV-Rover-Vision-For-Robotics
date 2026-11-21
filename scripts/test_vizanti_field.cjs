@@ -108,6 +108,18 @@ async function main(){
     assert.equal(calls.length,2,'empty input sent an invalid start');
     assert.match(elements['{uniqueID}_start_status'].textContent,/Enter a number/);
     elements['{uniqueID}_fit'].onclick();assert.equal(mocks.tf.fixed_frame,'map');
+    listeners['/football_field/state']({data:JSON.stringify({...fieldState,publish_tf:false,
+        start_control_enabled:true,pose_source:'marker_ekf'})});
+    listeners['/marker_triangulation/result']({data:JSON.stringify(fix)});
+    drawn.length=0;frame(1200);
+    assert(drawn.some(d=>d[0]==='fillText' && d[1]==='FUSED (-3.20, 0.00)'),
+        'EKF-aligned robot was mislabeled as raw odometry');
+    assert.match(elements['{uniqueID}_markers_status'].textContent,/Δ fused pose 0.36 m/);
+    assert.equal(elements['{uniqueID}_save_start'].disabled,false,'EKF start controls were disabled');
+    assert.equal(elements['{uniqueID}_apply_start'].disabled,false,'EKF reset was disabled');
+    listeners['/football_field/state']({data:JSON.stringify({...fieldState,publish_tf:false,
+        start_control_enabled:false,pose_source:'external'})});
+    assert.equal(elements['{uniqueID}_apply_start'].disabled,true,'unrelated external localization can be reset');
     listeners['/football_field/state']({data:JSON.stringify({...fieldState,odom_fresh:false})});
     assert.equal(elements['{uniqueID}_apply_start'].disabled,true,'stale odometry can be reapplied');
     elements['{uniqueID}_canvas'].isConnected=false;frame(2000);

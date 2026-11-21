@@ -2,6 +2,9 @@
 
 Measurements and results from the field: [FIELD_NOTES.md](FIELD_NOTES.md)
 
+Session 3 target planning lives in
+[`src/l2s3_curling`](../../src/l2s3_curling/README.md).
+
 Run inside the rover container (`docker exec -it -e ROS_DOMAIN_ID=4 ugv_jetson_ros_humble bash`,
 then `source /opt/ros/humble/setup.bash && source /home/ws/ugv_ws/install/setup.bash`).
 

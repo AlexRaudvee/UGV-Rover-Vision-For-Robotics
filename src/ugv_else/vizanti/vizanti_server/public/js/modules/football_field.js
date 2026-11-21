@@ -92,14 +92,14 @@ export class FieldClient {
         if (!this.connected || !this.state?.odom_fresh || !this.state.aligned ||
             !Array.isArray(robot) || robot.length !== 3 || !robot.every(Number.isFinite)) return null;
         return {position: [robot[0], robot[1], .02], heading: robot[2], color: '#f7c76b',
-            text: `ODOM (${robot[0].toFixed(2)}, ${robot[1].toFixed(2)})`};
+            text: `${this.state.pose_source === 'marker_ekf' ? 'FUSED' : this.state.pose_source === 'external' ? 'LOCALIZED' : 'ODOM'} (${robot[0].toFixed(2)}, ${robot[1].toFixed(2)})`};
     }
     get localizationStatus() {
         if (!this.triangulation) return 'Waiting for triangulation';
         if (!this.triangulationVisual) return `Triangulation: ${this.triangulation.error || 'measurement stale'}`;
         const delta = this.triangulation.position_delta_m;
         return `Triangulation: ${(this.triangulation.used_ids || []).length} markers` +
-            (Number.isFinite(delta) ? ` · Δ odometry ${delta.toFixed(2)} m (image time)` : ' · odometry comparison unavailable');
+            (Number.isFinite(delta) ? ` · Δ ${this.state?.pose_source === 'marker_ekf' ? 'fused pose' : 'odometry'} ${delta.toFixed(2)} m (image time)` : ' · pose comparison unavailable');
     }
     get cameraFov() {
         if (!this.connected || this.state?.frame_id !== this.layout?.frame_id) return [];
@@ -165,10 +165,14 @@ export class FieldClient {
                 const key = input.dataset.fieldKey;
                 input.value = this.state.start[key];
             });
-            element('save_start').disabled = pending || !this.connected || this.state?.publish_tf === false;
-            element('apply_start').disabled = pending || !this.connected || !this.state?.odom_fresh || this.state?.publish_tf === false;
+            const editable = typeof this.state?.start_control_enabled === 'boolean' ?
+                this.state.start_control_enabled : this.state?.publish_tf !== false;
+            element('save_start').disabled = pending || !this.connected || !editable;
+            element('apply_start').disabled = pending || !this.connected || !this.state?.odom_fresh || !editable;
             element('config_file').textContent = this.state?.config_file || 'Waiting for field server…';
-            element('start_status').textContent = this.state?.error || message || (this.state?.publish_tf === false ? 'Position supplied by external localization' : '') ||
+            element('start_status').textContent = this.state?.error || message ||
+                (this.state?.pose_source === 'marker_ekf' ? 'EKF owns field position; applying start resets the filter' : '') ||
+                (!editable ? 'Position supplied by external localization' : '') ||
                 (this.state?.aligned ? 'Start alignment active' : 'Waiting for odometry to align the start');
         };
         const perform = async action => {

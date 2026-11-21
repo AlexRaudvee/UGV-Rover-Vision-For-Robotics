@@ -95,6 +95,8 @@ function render(now) {
     }
     el('markers_status').textContent = [field.rangeStatus, field.cameraStatus, field.localizationStatus].filter(Boolean).join(' · ');
     el('status').textContent = !field.connected ? 'Field server unavailable' :
-        field.state?.odom_fresh ? 'Field and robot alignment active' : 'Field ready · waiting for fresh odometry';
+        !field.state?.aligned && field.state?.pose_source === 'marker_ekf' ? 'Waiting for EKF field alignment' :
+        field.state?.odom_fresh ? (field.state?.pose_source === 'marker_ekf' ?
+            'Field and fused localization active' : 'Field and robot alignment active') : 'Field ready · waiting for fresh odometry';
 }
 requestAnimationFrame(render);

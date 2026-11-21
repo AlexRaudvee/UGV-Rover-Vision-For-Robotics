@@ -8,7 +8,7 @@
     <input id="{uniqueID}_start_y_m" data-field-key="start_y_m" type="number" step="0.05" value="0">
     <label for="{uniqueID}_start_heading_deg">Start heading (degrees, left positive)</label>
     <input id="{uniqueID}_start_heading_deg" data-field-key="start_heading_deg" type="number" step="1" value="0">
-    <p>Place the robot at the entered position and heading before applying. This aligns the display and saves the numbers; it does not move the robot.</p>
+    <p>Place the robot at the entered position and heading before applying. This saves the start and resets localization when the EKF is active; it does not move the robot.</p>
     <button id="{uniqueID}_save_start">Save &amp; apply start</button>
     <button id="{uniqueID}_apply_start">Apply saved start here</button>
     <p id="{uniqueID}_start_status" role="status">Waiting for field server…</p>

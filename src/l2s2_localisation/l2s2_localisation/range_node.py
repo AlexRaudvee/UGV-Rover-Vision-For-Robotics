@@ -264,12 +264,17 @@ class MarkerRanges(Node):
                             'position_base_m': point.tolist(), 'side_px': observation['side_px']})
                     frame = 'base'
                     if robot is not None:
-                        point = base_to_map(point, robot)
-                        frame = f'field:{self.field.get("revision")}'
+                        # Filter in continuous odometry coordinates. An EKF TF
+                        # correction must not mix old/new map placements or ranges.
+                        point = base_to_map(point, self.odom.at(stamp))
+                        frame = f'odom:{self.field.get("session_id")}:{self.field.get("revision")}'
                     filtering = self.filters.setdefault(label, SpatialFilter(
                         self.config['filter_samples'], self.config['filter_window_s']))
                     filtered, points = filtering.add(stamp, point, frame)
                     if robot is not None:
+                        transform = self.field['transform']
+                        filtered = base_to_map(filtered, transform)
+                        points = np.array([base_to_map(p, transform) for p in points])
                         delta = filtered[:2]-np.array(robot[:2])
                         radial = np.linalg.norm(points[:, :2]-np.array(robot[:2]), axis=1)
                         bearing = math.atan2(delta[1], delta[0])-robot[2]
@@ -304,6 +309,7 @@ class MarkerRanges(Node):
         result = {'stamp': stamp if stamp is not None and math.isfinite(stamp) else self.now(),
                   'frame_id': (self.field or {}).get('frame_id', 'map'),
                   'field_revision': (self.field or {}).get('revision'),
+                  'field_session': (self.field or {}).get('session_id'),
                   'map_revision': revision, 'field': self.config['field'],
                   'source': 'same-image AprilTag ranges before odometry filtering',
                   'error': self.config_error or error, 'observations': observations,

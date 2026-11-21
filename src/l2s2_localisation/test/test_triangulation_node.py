@@ -58,7 +58,8 @@ def image(ranges, ids=(2, 3), robot=(-3.2, .2, .15), pan=.4):
         known = ranges.config['markers'][f'APRILTAG_standard41h12:{marker_id}']
         point_base = rot_z(-robot[2])@np.array([known[0]-robot[0], known[1]-robot[1], .15])
         tvec = ranges.mount.camera_rotation(pan, 0).T@(point_base-ranges.mount.camera_center(pan, 0))
-        corners, _ = cv2.projectPoints(square_object_points(.14), np.array([math.pi-.1, 0, 0]), tvec, camera.K, camera.D)
+        corners, _ = cv2.projectPoints(square_object_points(.14), np.array([math.pi-.1, 0, 0]),
+                                       tvec, camera.matrix_for(data['width'], data['height']), camera.D)
         data['detections'].append(dict(id=marker_id, family='APRILTAG_standard41h12',
                                        corners=corners.reshape(4, 2).tolist(), hamming=0, decision_margin=80))
     return data

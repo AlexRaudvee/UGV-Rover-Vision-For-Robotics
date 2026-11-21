@@ -57,6 +57,14 @@ def relative_motion(previous, current):
     return c * ddx + s * ddy, -s * ddx + c * ddy, wrap(current[2] - previous[2])
 
 
+def map_to_odom(map_pose, odom_pose):
+    """map <- odom from two robot poses at the SAME acquisition timestamp."""
+    heading = wrap(map_pose[2] - odom_pose[2])
+    c, s = math.cos(heading), math.sin(heading)
+    return (map_pose[0] - c * odom_pose[0] + s * odom_pose[1],
+            map_pose[1] - s * odom_pose[0] - c * odom_pose[1], heading)
+
+
 class MarkerEKF:
     def __init__(self, noise=NoiseModel(), motion=MotionNoise(), gate=CHI2_2DOF_99_9,
                  field_model=Field(), recover_after=5, recover_inflation=4.0):

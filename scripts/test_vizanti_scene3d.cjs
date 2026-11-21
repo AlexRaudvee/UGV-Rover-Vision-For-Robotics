@@ -67,6 +67,9 @@ fieldClient.triangulation={fresh:true,frame_id:'map',field_revision:1,position_m
 frame();
 assert(labels.includes('TRIANGULATION (-0.30, 0.20)'),'triangulation position missing in 3D');
 assert(labels.includes('ODOM (0.00, 0.00)'),'odometry position label missing in 3D');
+fieldClient.state.pose_source='marker_ekf';frame();
+assert.match(elements['{uniqueID}_status'].textContent,/^FUSED · /,
+    'EKF-aligned 3D robot was not identified as fused');
 assert.match(elements['{uniqueID}_markers_status'].textContent,/Triangulation: 2 markers/);
 fieldClient.camera={ready:true,pan_deg:30,left_rad:1,right_rad:1,range_m:4,
     origin_base:[.04,0,.01],horizontal_fov_deg:114.6};

@@ -16,6 +16,12 @@ cd ~/ugv_ws
 bash start_rover.sh --build
 ```
 
+The daily launch now also starts the marker EKF, which owns `map -> odom`.
+Stop an old standalone marker EKF before restarting; do not start another one.
+The field rover is labelled **FUSED**. **Apply saved start here** resets the EKF
+and field alignment together. See the
+[localization guide](src/l2s2_localisation/README.md#ekf-field-position-and-transforms).
+
 This starts the existing container if necessary, builds the project packages,
 and launches the motor interface, sensor feedback, odometry, IMU filter, LD19,
 robot transforms, USB and OAK cameras, Vizanti, the improved depth/LiDAR

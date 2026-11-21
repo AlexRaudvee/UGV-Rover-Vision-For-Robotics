@@ -3,6 +3,64 @@
 Provides live AprilTag distances for Vizanti, pan-tilt scanning, marker maps and
 basic/weighted localization. Depends on `l2s1_marker_detection`.
 
+Session 3 curling targets and path planning now live in
+[`l2s3_curling`](../l2s3_curling/README.md). The EKF remains here as part of
+Session 2 localization while moving.
+
+## EKF field position and transforms
+
+The daily rover launch now starts **one `marker_ekf` automatically**. Do not also
+start a standalone `ros2 run l2s2_localisation ekf` in that session. It predicts
+from `/odom` and corrects with raw `/marker_ranges/observations`; the filtered
+display ranges and fused field pose are never used as marker measurements.
+
+The EKF alone publishes `map -> odom`. The existing odometry publisher continues
+to own `odom -> base_footprint`. Pose and TF use the same odometry acquisition
+timestamp. Missing/stale odometry suspends both outputs. The field server consumes
+the corrected transform, so the rover, sensor data and planner share the same
+field coordinates. The field indicator is labelled **FUSED**, and triangulation
+is compared with the fused pose. Marker corrections may move the displayed rover.
+
+Startup uses a separate saved-start alignment from the field server, so it does
+not wait for its own TF to initialize. **Save & apply start** and **Apply saved
+start here** still work: they re-anchor the saved pose against current odometry
+and request one EKF reset, without resetting odometry or commanding movement.
+After returning the rover to the saved position and heading, run in a sourced
+container terminal:
+
+```bash
+ros2 service call /football_field/apply_start std_srvs/srv/Trigger '{}'
+```
+
+No second `/marker_ekf/reset` call is needed. That service remains available to
+restart the filter from its saved initial alignment; it does not itself declare
+that the rover has been physically returned to the start.
+
+`marker_ekf:=false` in the daily launch restores the original saved-start-only
+field alignment. `marker_ranges:=false` disables the live localization group and
+also restores that alignment. The standalone `marker_ranges.launch.py` keeps its
+previous defaults; explicit `marker_ekf:=true ekf_publish_tf:=true` needs the field
+server launched with `ekf_localization:=true`. A manually run EKF defaults to
+pose-only output (`publish_tf:=false`) so it cannot compete with the field TF.
+
+### Deploy without modifying an active session
+
+Stop the old rover launch, standalone EKF and planner with Ctrl+C in their three
+terminals. On the host, build/start with:
+
+```bash
+cd ~/ugv_ws
+bash start_rover.sh --build marker_preset:=improved
+```
+
+The EKF now belongs to this launch. Restart only the Session 3 planner in a second
+sourced container terminal, then hard-refresh Vizanti (Ctrl+Shift+R).
+
+The new `test/test_ekf_tf.py` uses synthetic inputs on isolated domain **91**.
+It covers marker-free startup, corrected transforms, matching timestamps, reset
+services, prevention of pose feedback, stale inputs and TF ownership. It never
+starts hardware drivers or publishes motor commands.
+
 ## Live marker distances in 2D and 3D
 
 The current detector publishes **`/marker_detector/detections`**, a
@@ -32,9 +90,10 @@ excluded for `head_settle_s`; smooth steps below `head_jump_threshold_deg` remai
 usable while tracking. The range reader itself does not move the camera; the
 localization launch now also starts the marker tracker described below.
 
-`/odom` is interpolated at the image timestamp, and the existing field alignment
-maps observations into field coordinates. Median filtering works on those fixed
-field positions, so normal robot movement does not lag a filtered scalar range.
+`/odom` is interpolated at the image timestamp. Median filtering works in continuous
+odometry coordinates, then the field alignment maps the result into field
+coordinates. Robot movement does not lag a filtered scalar range, and EKF alignment
+corrections do not mix differently aligned points in the median window.
 Without matched odometry, camera/robot-relative distance is still available;
 observed field placement and connecting lines wait for a matched field pose.
 

@@ -60,7 +60,7 @@ def image_data(node, tag_id=2):
     camera = node.cameras['rectified']
     # Marker at field (0,-.75,.15), rover at (-3.2,0,0). Camera is x=.04,z=.211.
     corners, _ = cv2.projectPoints(square_object_points(.14), np.array([math.pi-.1, 0, 0]),
-                                   np.array([.75, .061, 3.16]), camera.K, camera.D)
+                                   np.array([.75, .061, 3.16]), camera.matrix_for(640, 480), camera.D)
     return {'stamp': stamp, 'width': 640, 'height': 480, 'image_geometry': 'rectified',
             'detections': [{'family': 'APRILTAG_standard41h12', 'id': tag_id,
                             'corners': corners.reshape(4, 2).tolist(),
@@ -120,6 +120,27 @@ def test_stale_reads_and_field_reinitialization_do_not_show_live_ranges(pipeline
     assert not marker['fresh']
     node.on_field(field_state(revision=3))
     assert not node.records and not node.filters
+
+
+def test_ekf_alignment_correction_does_not_distort_filtered_ranges(pipeline):
+    node, _client, _executor, _results, _config = pipeline
+    node.on_field(field_state())
+    key = 'APRILTAG_standard41h12:2'
+    for _ in range(4):
+        data = image_data(node)
+        node.on_odom(odometry(data['stamp']))
+        node.on_detections(String(data=json.dumps(data)))
+    before = node.records[key]['range_m']
+    corrected = json.loads(field_state().data)
+    corrected['transform'] = [-1.2, .6, .3]  # EKF correction; same start revision.
+    node.on_field(String(data=json.dumps(corrected)))
+    data = image_data(node)
+    node.on_odom(odometry(data['stamp']))
+    node.on_detections(String(data=json.dumps(data)))
+    record = node.records[key]
+    assert record['stamp'] == data['stamp'], node.rejections
+    assert record['range_m'] == pytest.approx(before, abs=.002)
+    assert record['samples'] == 5
 
 
 def test_config_reload_and_rejections_preserve_valid_settings(pipeline):

@@ -212,6 +212,6 @@ function render() {
     el('mode').textContent = layout ? `3D · ${layout.frame_id} · SPL field` : '3D · odom';
     el('markers_status').textContent = [field.rangeStatus, field.cameraStatus, field.localizationStatus].filter(Boolean).join(' · ');
     const inputState=health && now-health.time<2000 ? (health.level ? health.text : 'estimation inputs fresh') : 'input health unavailable';
-    el('status').textContent=`${state}${odomFresh?'':' · ODOM STALE'}${layout && !field.connected?' · FIELD SERVER STALE':''} · ${lastCloud && now-lastCloud<1000?`${points.length} depth points · delay ${Math.max(0, previousStamp-cloudStamp).toFixed(1)} s`:(cloudError || 'depth unavailable/stale')} · ${inputState}`;
+    el('status').textContent=`${field.state?.pose_source === 'marker_ekf' ? 'FUSED · ' : ''}${state}${odomFresh?'':' · ODOM STALE'}${layout && !field.connected?' · FIELD SERVER STALE':''} · ${lastCloud && now-lastCloud<1000?`${points.length} depth points · delay ${Math.max(0, previousStamp-cloudStamp).toFixed(1)} s`:(cloudError || 'depth unavailable/stale')} · ${inputState}`;
 }
 requestAnimationFrame(render);

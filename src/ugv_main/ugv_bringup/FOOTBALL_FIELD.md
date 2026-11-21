@@ -2,7 +2,8 @@
 
 The daily rover launch starts `football_field` and supplies a 9 x 6 m RoboCup SPL
 field to both the 2D view and the 3D Rover + Depth panel. Both use geometry from
-one ROS publisher and the same `map -> odom` alignment. The field server never
+one ROS publisher and the same `map -> odom` alignment. In the daily launch,
+`marker_ekf` owns that transform and the field server consumes it. The field server never
 publishes velocity or pan-tilt commands.
 
 ## Change the starting position
@@ -55,7 +56,8 @@ applying the saved start each session. Applying works with nonzero odometry;
 restarting/resetting the odometry estimator is not required. Clock rewinds clear
 the old anchor. Physically repositioning the robot or resetting odometry during
 a session requires applying the saved start again. Ordinary odometry drift still
-requires external localization to correct it.
+is corrected by the marker EKF in the daily launch. Standalone field alignment
+still follows odometry without marker corrections.
 
 ## Startup and views
 
@@ -75,8 +77,9 @@ Reload Vizanti. Its existing saved layout receives **Football Field** and the
 2D robot widget automatically. The initial fixed frame becomes `map`. Other
 camera widgets and their positions are preserved. Use **Back to 2D**, **3D**,
 **View whole field**, and **Fit field to view** to switch views and fit the pitch.
-The gold marker is the configured start; the robot follows odometry in field
-coordinates. Applying a start clears the 3D trail and old depth samples. The
+The gold marker is the configured start; the daily robot follows EKF-corrected
+field coordinates and is labelled **FUSED**. Applying a start resets the EKF using
+the current odometry as its anchor and clears the 3D trail and old depth samples. The
 rover, new depth points and trail all use the same rotation and translation.
 
 Start only the field server in an already sourced ROS terminal:
@@ -91,7 +94,12 @@ the daily launch already started one. `football_field:=false` disables it in
 the daily launch; `field_config:=/absolute/path/custom.yaml` selects another file.
 The file path displayed in Vizanti is the authoritative file being read/written.
 
-If AMCL, SLAM or another localizer already publishes `map -> odom`, set
+The daily launch passes `ekf_localization:=true`: the field never publishes TF
+and its start controls send a separate revisioned initial alignment to the EKF.
+The EKF starts automatically, even before any tags are seen. No extra standalone
+EKF is needed. `marker_ekf:=false` selects the previous field-owned alignment.
+
+For AMCL, SLAM or another external localizer, disable the daily marker EKF and set
 `publish_tf: false` before starting this field server. It will display that
 external transform instead, and the start-alignment controls are disabled.
 Do not keep an old manual static `map -> odom` publisher running alongside it.
@@ -121,8 +129,8 @@ python3 scripts/generate_football_map.py
 | `/football_field/layout` | Shared metre-based drawing primitives (JSON String) |
 | `/football_field/state` | Start, alignment, freshness and config path (JSON String) |
 | `/field_map` | Free carpet / optional goal occupancy |
-| `/tf` | `map -> odom` alignment when enabled |
-| `/football_field/apply_start` | Trigger: align the current robot pose to the saved start |
+| `/tf` | Daily: EKF owns `map -> odom`; standalone field can own it |
+| `/football_field/apply_start` | Trigger: reset EKF/start alignment at current odometry |
 | `/football_field/set_parameters_atomically` | Save/apply the three `start_*` parameters together |
 
 The marker-localization marker map still needs its actual landmark coordinates;

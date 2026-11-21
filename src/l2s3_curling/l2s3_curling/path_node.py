@@ -1,6 +1,6 @@
 """Path to a Session 3 target, shown in Vizanti. Plans only; never drives.
 
-    ros2 run l2s2_localisation path_planner --ros-args -p target_run:=1
+    ros2 run l2s3_curling path_planner --ros-args -p target_run:=1
 
 Inputs
   pose_topic  (default /marker_ekf/pose)   robot pose from the Kalman filter

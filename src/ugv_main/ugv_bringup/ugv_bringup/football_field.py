@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import tempfile
 import time
+import uuid
 import yaml
 
 from ament_index_python.packages import get_package_share_directory
@@ -32,16 +33,23 @@ class FootballField(Node):
         default_path = str(Path(get_package_share_directory('ugv_bringup')) /
                            'param' / 'football_field.yaml')
         self.declare_parameter('config_file', default_path)
+        # Explicit ownership: the standalone field retains its original behaviour.
+        self.ekf_localization = self.declare_parameter('ekf_localization', False).value
         self.config_path = Path(self.get_parameter('config_file').value).expanduser()
         self.config = load_config(self.config_path)
+        if self.ekf_localization:
+            self.config['publish_tf'] = False
         for name, value in self.config.items():
             self.declare_parameter(name, value)
         self.config = {key: self.get_parameter(key).value for key in DEFAULTS}
         validate(self.config)
+        if self.ekf_localization and self.config['publish_tf']:
+            raise ValueError('EKF localization and field-owned TF cannot both be enabled')
         self.latest = self.anchor = None
         self.last_received = None
         self.last_stamp = None
         self.revision = 0
+        self.session_id = uuid.uuid4().hex
         self.error = ''
         self.loading_file = False
         self.file_stamp = self.config_path.stat().st_mtime_ns
@@ -121,7 +129,7 @@ class FootballField(Node):
             return SetParametersResult(successful=False, reason='Only start_* can change live; restart for other settings')
         if not changes:
             return SetParametersResult(successful=True)
-        if not self.config['publish_tf']:
+        if not self.config['publish_tf'] and not self.ekf_localization:
             return SetParametersResult(successful=False, reason='External localization owns the field pose; edit the file for the next standalone run')
         candidate = {**self.config, **changes}
         try:
@@ -137,14 +145,17 @@ class FootballField(Node):
         return SetParametersResult(successful=True)
 
     def apply_start(self, _request, response):
-        if not self.config['publish_tf']:
+        if not self.config['publish_tf'] and not self.ekf_localization:
             response.success, response.message = False, 'External localization owns the field pose'
         elif not self.fresh():
             response.success, response.message = False, 'No fresh /odom; place the robot and start odometry first'
         else:
             self.anchor = self.latest
             self.revision += 1
-            response.success, response.message = True, 'Current robot pose aligned with the saved start; no motion commanded'
+            response.success = True
+            response.message = ('Saved-start reset requested for marker EKF; no motion commanded'
+                                if self.ekf_localization else
+                                'Current robot pose aligned with the saved start; no motion commanded')
         return response
 
     def reload_start(self):
@@ -162,7 +173,8 @@ class FootballField(Node):
                     raise ValueError(result.reason)
             self.file_stamp = stamp
             self.error = ''
-            if any(candidate[k] != self.config[k] for k in DEFAULTS if k not in START_KEYS):
+            if any(candidate[k] != self.config[k] for k in DEFAULTS if k not in START_KEYS
+                   and not (self.ekf_localization and k == 'publish_tf')):
                 self.error = 'Field geometry or frame settings changed: restart field server to load them'
         except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as error:
             self.error = f'Config not loaded: {error}'
@@ -186,15 +198,20 @@ class FootballField(Node):
 
     def tick(self):
         start = tuple(self.config[k] for k in START_KEYS)
-        transform = alignment(start, self.anchor) if self.anchor is not None else None
+        start_transform = alignment(start, self.anchor) if self.anchor is not None else None
+        transform = start_transform
         if not self.config['publish_tf']:
             transform = None
             try:
                 external = self.tf_buffer.lookup_transform(
                     self.config['map_frame'], self.config['odom_frame'], Time())
+                age = (self.get_clock().now().nanoseconds / 1e9 -
+                       external.header.stamp.sec - external.header.stamp.nanosec / 1e9)
+                if self.ekf_localization and not -.1 <= age <= self.config['odom_timeout_s']:
+                    raise ValueError('EKF transform is stale')
                 p, q = external.transform.translation, external.transform.rotation
                 transform = (p.x, p.y, math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z)))
-            except TransformException:
+            except (TransformException, ValueError):
                 pass
         if transform and self.config['publish_tf']:
             message = TransformStamped()
@@ -210,7 +227,12 @@ class FootballField(Node):
                  'config_file': str(self.config_path), 'start': dict(zip(START_KEYS, start)),
                  'aligned': transform is not None, 'odom_fresh': self.fresh(),
                  'transform': transform, 'robot': robot, 'revision': self.revision,
-                 'publish_tf': self.config['publish_tf'], 'error': self.error}
+                 'publish_tf': self.config['publish_tf'], 'error': self.error,
+                 'session_id': self.session_id, 'start_transform': start_transform,
+                 'start_control_enabled': self.config['publish_tf'] or self.ekf_localization,
+                 'ekf_localization': self.ekf_localization,
+                 'pose_source': ('marker_ekf' if self.ekf_localization else
+                                 'odometry' if self.config['publish_tf'] else 'external')}
         self.state_pub.publish(String(data=json.dumps(state)))
 
 
