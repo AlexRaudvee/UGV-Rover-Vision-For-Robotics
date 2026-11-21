@@ -42,5 +42,5 @@ forward/back, right stick = turn, B = stop, Back = quit. `--show` prints the sti
 
 One-time setup (separate environment, does not touch other Python projects):
 
-    python -m venv %USERPROFILE%envsover-gamepad
-    %USERPROFILE%envsover-gamepad\Scripts\python -m pip install pygame roslibpy
+    python -m venv %USERPROFILE%\venvs\rover-gamepad
+    %USERPROFILE%\venvs\rover-gamepad\Scripts\python -m pip install pygame roslibpy
