@@ -14,11 +14,13 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
 SPEED = 0.15                 # m/s
-RADIUS = 1.2                 # m, left
-TURN_DEG = 180.0
-MAX_DISTANCE_M = 4.0
-TIME_LIMIT_S = 35.0
+RADIUS = 1.5                 # m, left
+TURN_DEG = 90.0
+MAX_DISTANCE_M = 2.6
+TIME_LIMIT_S = 25.0
 RATE_HZ = 20.0
+CHECK_AFTER_M = 1.0          # safety: by now the heading must have changed
+MIN_TURN_AT_CHECK_DEG = 15.0 # (expected ~38 deg at R = 1.5 m)
 
 
 def yaw_of(q):
@@ -54,6 +56,7 @@ def main():
               flush=True)
         t0 = time.monotonic()
         turned, travelled, last = 0.0, 0.0, state['pose']
+        not_turning = False
         while (turned < math.radians(TURN_DEG) and travelled < MAX_DISTANCE_M
                and time.monotonic() - t0 < TIME_LIMIT_S):
             send(SPEED, SPEED / RADIUS)
@@ -62,7 +65,11 @@ def main():
             travelled += math.hypot(x - last[0], y - last[1])
             turned += math.atan2(math.sin(h - last[2]), math.cos(h - last[2]))
             last = state['pose']
-        reason = ('turn reached' if turned >= math.radians(TURN_DEG) else
+            if travelled >= CHECK_AFTER_M and turned < math.radians(MIN_TURN_AT_CHECK_DEG):
+                not_turning = True       # driving straight instead of curving: abort
+                break
+        reason = ('NOT TURNING - aborted' if not_turning else
+                  'turn reached' if turned >= math.radians(TURN_DEG) else
                   'distance limit' if travelled >= MAX_DISTANCE_M else 'TIME LIMIT')
         print(f'stop: {reason}; turned {math.degrees(turned):.1f} deg, {travelled:.2f} m, '
               f'{time.monotonic() - t0:.1f} s', flush=True)
