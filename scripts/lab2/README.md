@@ -33,3 +33,14 @@ To record while a script runs, start `ros2 bag record ...` in another terminal f
 | `test_triangulation_bags.py [BAG_FOLDER]` | laptop (`pip install rosbags opencv-python`) | Runs every triangulation method on the Lab 2 bags and compares with the measured positions |
 
 For the laptop script, put `src/l2s2_localisation` and `src/l2s1_marker_detection` on `PYTHONPATH`.
+
+## Driving with a game controller on the laptop
+
+`gamepad_drive.py` reads a controller plugged into the laptop and sends `/cmd_vel` to the rover
+through Vizanti's rosbridge (no ROS needed on the laptop). Hold LB to drive, left stick =
+forward/back, right stick = turn, B = stop, Back = quit. `--show` prints the sticks and buttons.
+
+One-time setup (separate environment, does not touch other Python projects):
+
+    python -m venv %USERPROFILE%envsover-gamepad
+    %USERPROFILE%envsover-gamepad\Scripts\python -m pip install pygame roslibpy
