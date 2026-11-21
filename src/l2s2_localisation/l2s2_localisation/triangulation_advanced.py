@@ -20,6 +20,11 @@ Equations (same names as the write-up):
          bearing row [  dyi/di^2,  -dxi/di^2,  -1 ]
          (J^T W J) delta = J^T W e,   (x, y, h) += delta
   7. uncertainty = (J^T W J)^-1
+  8. consistency (localize_robust): with good markers the score is about the
+     number of spare measurements, dof = (#ranges + #bearings) - 3. If it is
+     above the chi-square limit for dof (99 %), the markers disagree by more
+     than noise explains: drop the marker whose removal lowers the score most,
+     re-solve, check again. Needs 3+ markers (with 2 a bad one cannot be found).
 
 Works with 2 or more markers that have bearings. No ROS imports.
 """
@@ -162,3 +167,55 @@ def localize_advanced(markers, noise=NoiseModel(), field_model=Field(), max_iter
     return AdvancedFix(float(state[0]), float(state[1]), float(state[2]), covariance,
                        iterations, tuple(float(v) for v in start),
                        score(state, markers, noise), warnings)
+
+
+# ---------------------------------------------------------------- step 8
+def chi2_limit(dof, confidence=0.99):
+    """Chi-square quantile (Wilson-Hilferty approximation; within ~2 % for dof >= 1)."""
+    z = {0.95: 1.6449, 0.99: 2.3263, 0.999: 3.0902}[confidence]
+    k = float(dof)
+    return k * (1.0 - 2.0 / (9.0 * k) + z * math.sqrt(2.0 / (9.0 * k))) ** 3
+
+
+def degrees_of_freedom(markers):
+    """Spare measurements: every range and bearing, minus the 3 unknowns (x, y, h)."""
+    return len(markers) + sum(m.bearing is not None for m in markers) - 3
+
+
+def localize_robust(markers, noise=NoiseModel(), field_model=Field(), confidence=0.99,
+                    min_markers=3):
+    """localize_advanced, then drop markers that disagree with the rest (leave-one-out).
+
+    Returns (fix, dropped) where dropped lists (label, score before, score after).
+    A marker is only dropped while at least min_markers remain afterwards, because
+    with fewer it cannot be told which marker is wrong.
+    """
+    markers = list(markers)
+    fix = localize_advanced(markers, noise, field_model)
+    dropped = []
+    while True:
+        dof = degrees_of_freedom(markers)
+        limit = chi2_limit(dof, confidence) if dof > 0 else float('inf')
+        if fix.score <= limit:
+            break
+        if len(markers) - 1 < min_markers:
+            fix.warnings.append(f'markers disagree (score {fix.score:.1f} > {limit:.1f}) but too '
+                                f'few to find the bad one')
+            break
+        trials = []
+        for index in range(len(markers)):
+            rest = markers[:index] + markers[index + 1:]
+            try:
+                trials.append((localize_advanced(rest, noise, field_model), index))
+            except (ValueError, np.linalg.LinAlgError):
+                continue
+        if not trials:
+            break
+        best, index = min(trials, key=lambda t: t[0].score)
+        dropped.append((markers[index].label, round(fix.score, 1), round(best.score, 1)))
+        markers = markers[:index] + markers[index + 1:]
+        fix = best
+    if dropped:
+        fix.warnings.append('dropped inconsistent marker(s): '
+                            + ', '.join(label for label, _, _ in dropped))
+    return fix, dropped
