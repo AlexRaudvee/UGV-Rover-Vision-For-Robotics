@@ -28,6 +28,7 @@ setup(
             'ranges = l2s2_localisation.range_node:main',
             'pan_tracker = l2s2_localisation.pan_tracker_node:main',
             'triangulation = l2s2_localisation.triangulation_node:main',
+            'ekf = l2s2_localisation.ekf_node:main',
         ],
     },
 )
