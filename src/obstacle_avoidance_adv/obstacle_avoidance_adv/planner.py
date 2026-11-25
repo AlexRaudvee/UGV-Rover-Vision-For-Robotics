@@ -102,6 +102,7 @@ class Settings:
     reaction_time: float = .20
     heading_tolerance: float = .04
     distance_tolerance: float = .035
+    goal_tolerance_m: float = .08
     settle_time: float = .25
     minimum_coverage: float = .65
     mission_timeout: float = 180.
@@ -357,6 +358,18 @@ class Controller:
     def fail(self,reason):
         self.state='FAULT';self.reason=reason;return 0.,0.
 
+    def finish_if_at_goal(self,distance,now,source='Estimated'):
+        """Arrival takes priority over every active manoeuvre, including backing up."""
+        if not self.active:
+            return False
+        if not math.isfinite(distance) or distance<0:
+            raise ValueError('Goal distance must be finite and nonnegative')
+        if distance<=self.cfg.goal_tolerance_m+1e-9:
+            self.change('DONE',now,f'{source} target reached: {distance:.3f} m '
+                        f'<= {self.cfg.goal_tolerance_m:.3f} m')
+            return True
+        return False
+
     def speed_limit(self,available,ceiling,age):
         a=self.cfg.braking_deceleration;t=self.cfg.reaction_time+age
         return min(ceiling,max(0.,math.sqrt((a*t)**2+2*a*max(0.,available))-a*t))
@@ -402,10 +415,14 @@ class Controller:
         self.reason=f'{self.state}: clearance {clearance:.2f} m, remaining {remaining:.2f} m'
         return speed*max(0.,math.cos(error)),float(np.clip(1.5*error,-.3,.3)) if abs(error)>.025 else 0.
 
-    def step(self,pose,view,now,yaw_rate=0.,measured_speed=0.):
+    def step(self,pose,view,now,yaw_rate=0.,measured_speed=0.,arrival_distance=None):
         if not self.active:return 0.,0.
         self.now=now
         pose=np.asarray(pose)
+        # ROS supplies the validated FUSED distance. Standalone simulations retain local arrival.
+        distance=float(np.linalg.norm(self.goal-pose[:2])) if arrival_distance is None else arrival_distance
+        if self.finish_if_at_goal(distance,now,'Estimated' if arrival_distance is None else 'FUSED'):
+            return 0.,0.
         if now-self.started>self.cfg.mission_timeout:return self.fail('Mission timeout')
         if np.linalg.norm(pose[:2]-self.progress_pose[:2])>.03 or abs(wrap(pose[2]-self.progress_pose[2]))>.05:
             self.progress_pose=pose.copy();self.progress_at=now
@@ -419,8 +436,6 @@ class Controller:
         if view.rotation_clear():self.backoff_start=None
         if self.state in ('APPROACH','REJOIN'):
             delta=self.goal-pose[:2];distance=float(np.linalg.norm(delta))
-            if distance<=.08:
-                self.change('DONE',now,'Original endpoint reached');return 0.,0.
             heading=math.atan2(delta[1],delta[0]);error=wrap(heading-pose[2])
             if abs(error)<.20 and view.clearance(error)<=self.cfg.gap_lookahead and self.enter_gap(pose,view,heading,now):
                 return 0.,0.

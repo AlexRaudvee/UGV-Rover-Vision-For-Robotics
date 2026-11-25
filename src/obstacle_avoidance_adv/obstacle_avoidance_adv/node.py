@@ -20,6 +20,7 @@ from tf2_sensor_msgs.tf2_sensor_msgs import transform_points
 from l2s3_curling.path_plan import TARGETS
 from .planner import Controller,Settings,Scan,View,wrap,rotation,relative_pose,ekf_goal_guidance
 from .motion import MotionLimiter
+from .visualization import motion_intent
 
 
 def yaw(q):
@@ -32,7 +33,7 @@ class AvoidanceNode(Node):
         defaults=dict(vars(Settings()),scan_topic='/scan',odom_topic='/odom',imu_topic='/imu/estimation',
                       target_run=0,
                       ekf_pose_topic='/marker_ekf/pose',ekf_frame='map',ekf_timeout=1.0,
-                      max_position_std_m=.50,max_heading_std_deg=20.0,
+                      max_position_std_m=.80,max_heading_std_deg=30.0,
                       detection_topic='/detection_improved/obstacle/detections',
                       command_topic='/obstacle_avoidance_adv/cmd_vel',base_frame='base_footprint',
                       input_timeout=1.5,depth_timeout=3.,scan_memory_s=.30,control_rate=20.,
@@ -68,8 +69,11 @@ class AvoidanceNode(Node):
         self.goal_map=None;self.navigation_anchor=None
         self.navigation_status=dict(ready=False,reason='No active mission',
                                     target_run=target_run,target_name=self.target_name)
+        self.local_started_at=None;self.last_visualization=0.
+        self.arrival=None
         self.command=self.create_publisher(Twist,self.value('command_topic'),1)
         self.status=self.create_publisher(String,'~/status',1);self.path=self.create_publisher(Path,'~/planned_path',1)
+        self.visualization_pub=self.create_publisher(String,'~/visualization',1)
         self.create_subscription(LaserScan,self.value('scan_topic'),self.on_scan,qos_profile_sensor_data)
         self.create_subscription(Imu,self.value('imu_topic'),self.on_imu,qos_profile_sensor_data)
         self.create_subscription(Odometry,self.value('odom_topic'),self.on_odom,qos_profile_sensor_data)
@@ -171,8 +175,6 @@ class AvoidanceNode(Node):
                           sigma_position_m=position_std,sigma_heading_deg=heading_std,
                           within_uncertainty_limits=not uncertainty_errors,
                           uncertainty_reason='; '.join(uncertainty_errors))
-            if fresh and uncertainty_errors:
-                report['reason']=report['uncertainty_reason']
             # Compare only while the legacy estimate is integrating an active mission.
             if not fresh:
                 raise ValueError(report['reason'])
@@ -215,15 +217,13 @@ class AvoidanceNode(Node):
         report=self.ekf_diagnostics()
         if not report['valid'] or not report['fresh']:
             raise ValueError('EKF input unavailable: '+report['reason'])
-        if not report['within_uncertainty_limits']:
-            raise ValueError(report['uncertainty_reason'])
         if (self.field_reference is None or self.field_received is None
                 or time.monotonic()-self.field_received>self.value('input_timeout')):
             raise ValueError('Waiting for fresh assumed-start field metadata')
         return report
 
-    def update_navigation_goal(self,report):
-        """Use EKF corrections for goal guidance while keeping bypass/scan coordinates continuous."""
+    def fused_goal_distance(self,report):
+        """Use the published FUSED pose itself as the arrival authority, in map coordinates."""
         if self.goal_map is None or self.comparison_reference is None:
             raise ValueError('Navigation has no fixed map goal or assumed start')
         key,start=self.comparison_reference
@@ -231,7 +231,11 @@ class AvoidanceNode(Node):
             raise ValueError('Field alignment changed; stop and start a new mission')
         if self.navigation_anchor is not None and report['stamp_s']<self.navigation_anchor['stamp_s']:
             raise ValueError('EKF acquisition time moved backwards; start a new mission')
+        return float(np.linalg.norm(self.goal_map-np.array(report['position_m'])))
 
+    def update_navigation_goal(self,report):
+        """Use EKF corrections for goal guidance while keeping bypass/scan coordinates continuous."""
+        fused_distance=self.fused_goal_distance(report)
         comparison=report['comparison']
         if comparison['ready']:
             # Only combine estimates with matching acquisition times.
@@ -256,7 +260,9 @@ class AvoidanceNode(Node):
             target_run=self.value('target_run'),target_name=self.target_name,
             goal_map_m=self.goal_map.tolist(),goal_motion_m=goal.tolist(),
             pose_map=pose_map.tolist(),ekf_stamp_s=anchor['stamp_s'],ekf_age_s=age,
-            distance_to_goal_m=float(np.linalg.norm(self.goal_map-pose_map[:2])))
+            distance_to_goal_m=fused_distance,arrival_source='FUSED',
+            fused_pose_map=[*report['position_m'],math.radians(report['heading_deg'])],
+            projected_distance_to_goal_m=float(np.linalg.norm(self.goal_map-pose_map[:2])))
 
     def on_scan(self,msg):
         if self.latest_scan is not None and self.stamp(msg)<=self.stamp(self.latest_scan):return
@@ -372,10 +378,12 @@ class AvoidanceNode(Node):
             else:
                 self.goal_map=self.comparison_reference[1][:2]+np.array([self.controller.cfg.goal_distance,0.])
             self.navigation_anchor=None
+            self.arrival=None
             self.navigation_status=dict(ready=False,reason='Waiting for timestamp-matched EKF and wheel/gyro poses',
                                         goal_map_m=self.goal_map.tolist(),target_run=target_run,
                                         target_name=self.target_name)
             self.history.append((self.now(),self.pose.copy()));self.controller.start(self.pose,time.monotonic())
+            self.local_started_at=self.now()
             # Initial visualisation uses the assumed start; motion still waits for an EKF match.
             self.controller.set_goal(self.goal_map-self.comparison_reference[1][:2])
             self.motion.reset();self.hold_since=None
@@ -411,28 +419,122 @@ class AvoidanceNode(Node):
         return dict(frame_id=self.value('ekf_frame'),position_m=goal.tolist(),
                     target_run=self.value('target_run'),target_name=self.target_name)
 
+    def motion_visualization(self):
+        """Keep dead reckoning fixed to the start, but place intent using EKF alignment."""
+        ekf=self.ekf_diagnostics()
+        result=dict(frame_id=self.value('ekf_frame'),state=self.controller.state,
+                    reason=self.controller.reason,readiness=self.readiness,motion_status=self.motion.status,
+                    ekf_warning=ekf['uncertainty_reason'] if ekf['fresh'] else '',
+                    navigation=self.navigation_status,
+                    command_velocity=list(self.last_sent),goal=self.goal_visualization(),
+                    local_pose=None,fused_pose=None,local_fresh=False,comparison=None,intent=None,
+                    local_timeout_s=self.value('input_timeout'),fused_timeout_s=self.value('ekf_timeout'),
+                    session_id=None,revision=None)
+        reference=self.comparison_reference
+        same_reference=(reference is not None and self.field_reference is not None
+                        and reference[0]==self.field_reference[0]
+                        and np.array_equal(reference[1],self.field_reference[1]))
+        if same_reference:
+            key,start=reference
+            result.update(session_id=key[0],revision=key[1])
+            # This is deliberately the ORIGINAL alignment, never the current EKF transform.
+            result['local_pose']=[float(start[0]+self.pose[0]),float(start[1]+self.pose[1]),float(self.pose[2])]
+            stamp=self.comparison_history[-1][0] if self.comparison_history else self.local_started_at
+            if stamp is not None:
+                age=self.now()-stamp
+                fresh=-.1<=age<=self.value('input_timeout')
+                if self.controller.active:
+                    gyro_age=self.now()-self.gyro_stamp if self.gyro_stamp is not None else math.inf
+                    fresh=fresh and -.1<=gyro_age<=self.value('input_timeout')
+                    if math.isfinite(gyro_age):
+                        age=max(age,gyro_age)
+                result.update(local_age_s=age,local_fresh=fresh)
+            comparison=ekf.get('comparison',{})
+            if comparison.get('ready'):
+                result['comparison']=dict(distance_m=comparison['distance_difference_m'],
+                                          heading_deg=comparison['delta_heading_deg'])
+        if ekf['valid'] and ekf['fresh']:
+            result['fused_pose']=[*ekf['position_m'],math.radians(ekf['heading_deg'])]
+            result['fused_age_s']=ekf['age_s']
+            # Show the actual published FUSED pose/distance, which is also the arrival authority.
+            if result['goal'] is not None:
+                result['distance_to_goal_m']=float(np.linalg.norm(
+                    np.array(result['goal']['position_m'])-np.array(result['fused_pose'][:2])))
+        if result['local_fresh'] and result['fused_pose'] is not None and self.navigation_anchor is not None:
+            intent=motion_intent(self.controller,self.pose,self.last_sent,
+                self.readiness if self.readiness!='Ready' else self.motion.status if not any(self.last_sent) else '')
+            # Anchor the action to the corrected robot pose. Its waypoints remain local internally.
+            angle=result['fused_pose'][2]-self.pose[2]
+            origin=np.array(result['fused_pose'][:2])
+            intent['path']=[(origin+rotation(angle)@(np.array(p)-self.pose[:2])).tolist() for p in intent['path']]
+            result['intent']=intent
+        return result
+
+    def publish_motion_path(self,visualization):
+        """Replace the rough waypoint chain with a short map-frame command preview."""
+        path=Path();path.header.frame_id=self.value('ekf_frame')
+        path.header.stamp=self.get_clock().now().to_msg()
+        intent=visualization.get('intent')
+        # An in-place rotation is an icon/arc, not a translated robot-centre trajectory.
+        if intent and intent['kind'] in ('drive','reverse'):
+            points=intent['path']
+            for i,point in enumerate(points):
+                item=PoseStamped(header=path.header)
+                item.pose.position.x,item.pose.position.y=point
+                a,b=(points[i],points[i+1]) if i+1<len(points) else (points[i-1],points[i])
+                heading=math.atan2(b[1]-a[1],b[0]-a[0])+(math.pi if intent['kind']=='reverse' else 0.)
+                item.pose.orientation.z=math.sin(heading/2);item.pose.orientation.w=math.cos(heading/2)
+                path.poses.append(item)
+        self.path.publish(path)
+
     def tick(self):
         now=time.monotonic();self.history.append((self.now(),self.pose.copy()))
         active=self.controller.active
         try:
-            view=self.prepare()
-            report=self.require_ekf_pose()
+            report=None;arrived=False;arrival_distance=None
             if active:
-                self.update_navigation_goal(report)
-            else:
-                self.navigation_status.update(ready=False,reason='No active mission')
-            # Clear the hold timer only after every required input has recovered.
-            self.readiness='Ready';self.hold_since=None
-            if active:
-                v,w=self.controller.step(self.pose,view,now,self.gyro_rate,self.velocity)
-                mismatch=(abs(self.last_sent[1])>.15 and self.gyro_rate*self.last_sent[1]<-.015)
-                if mismatch:
-                    if self.direction_mismatch_since is None:self.direction_mismatch_since=now
-                    if now-self.direction_mismatch_since>.5:v,w=self.controller.fail('Commanded turn opposes physical gyro rotation; check motor/IMU sign')
-                else:self.direction_mismatch_since=None
-                if now-self.controller.progress_at>20 and max(abs(x) for x in self.last_sent)>.1:
-                    v,w=self.controller.fail('Commanded motion made no measured progress')
-                self.send(*self.motion.update(v,w,now))
+                # Check arrival before scan readiness, local-history matching or any bypass action.
+                report=self.require_ekf_pose()
+                arrival_distance=self.fused_goal_distance(report)
+                previous_state=self.controller.state
+                arrived=self.controller.finish_if_at_goal(arrival_distance,now,'FUSED')
+                if arrived:
+                    self.motion.reset();self.send(0.,0.)
+                    self.readiness='Ready';self.hold_since=None
+                    self.arrival=dict(source='FUSED',previous_state=previous_state,
+                        pose_map=[*report['position_m'],math.radians(report['heading_deg'])],
+                        goal_map_m=self.goal_map.tolist(),distance_m=arrival_distance,
+                        tolerance_m=self.controller.cfg.goal_tolerance_m,stamp_s=report['stamp_s'],
+                        sigma_position_m=report['sigma_position_m'],sigma_heading_deg=report['sigma_heading_deg'],
+                        uncertainty_warning=report['uncertainty_reason'])
+                    self.navigation_status.update(ready=True,reason=self.controller.reason,
+                        distance_to_goal_m=arrival_distance,arrival_source='FUSED',
+                        pose_map=self.arrival['pose_map'],goal_map_m=self.goal_map.tolist())
+                    self.get_logger().info(f'{previous_state} -> DONE: FUSED position '
+                        f'{report["position_m"]}, goal {self.goal_map.tolist()}, '
+                        f'distance {arrival_distance:.3f} m <= {self.controller.cfg.goal_tolerance_m:.3f} m; '
+                        f'FUSED uncertainty {report["sigma_position_m"]:.2f} m / '
+                        f'{report["sigma_heading_deg"]:.2f} deg; sent zero velocity')
+            if not arrived:
+                view=self.prepare()
+                report=report if report is not None else self.require_ekf_pose()
+                if active:
+                    self.update_navigation_goal(report)
+                else:
+                    self.navigation_status.update(ready=False,reason='No active mission')
+                # Clear the hold timer only after every required input has recovered.
+                self.readiness='Ready';self.hold_since=None
+                if active:
+                    v,w=self.controller.step(self.pose,view,now,self.gyro_rate,self.velocity,
+                                             arrival_distance=arrival_distance)
+                    mismatch=(abs(self.last_sent[1])>.15 and self.gyro_rate*self.last_sent[1]<-.015)
+                    if mismatch:
+                        if self.direction_mismatch_since is None:self.direction_mismatch_since=now
+                        if now-self.direction_mismatch_since>.5:v,w=self.controller.fail('Commanded turn opposes physical gyro rotation; check motor/IMU sign')
+                    else:self.direction_mismatch_since=None
+                    if now-self.controller.progress_at>20 and max(abs(x) for x in self.last_sent)>.1:
+                        v,w=self.controller.fail('Commanded motion made no measured progress')
+                    self.send(*self.motion.update(v,w,now))
         except (ValueError,TransformException) as error:
             self.readiness=str(error)
             self.navigation_status.update(ready=False,reason=str(error))
@@ -440,6 +542,12 @@ class AvoidanceNode(Node):
                 self.send(0.,0.);self.motion.reset();self.controller.reason='Input hold: '+str(error)
                 if self.hold_since is None:self.hold_since=now
                 if 'publisher' in str(error) or now-self.hold_since>5.:self.controller.fail(str(error))
+        # Smooth diagnostic overlays without increasing the verbose status-log frequency.
+        if now-self.last_visualization>.1:
+            self.last_visualization=now
+            visualization=self.motion_visualization()
+            self.visualization_pub.publish(String(data=json.dumps(visualization)))
+            self.publish_motion_path(visualization)
         if now-self.last_status>.5:
             self.last_status=now
             self.status.publish(String(data=json.dumps(dict(state=self.controller.state,reason=self.controller.reason,
@@ -450,19 +558,11 @@ class AvoidanceNode(Node):
                 localization='marker_ekf_goal_guidance',motion_localization='gyro_heading_and_forward_velocity',
                 speed_source=self.speed_source,navigation=self.navigation_status,
                 goal=self.goal_visualization(),
+                arrival=self.arrival,
                 ekf=self.ekf_diagnostics(),
                 front_clearance_m=None if self.view is None or not math.isfinite(self.view.clearance()) else self.view.clearance(),
                 lidar_age_s=None if self.latest_scan is None else self.now()-self.stamp(self.latest_scan),
                 bypass_candidates=self.controller.side_choices))))
-            path=Path();path.header.frame_id='odom';path.header.stamp=self.get_clock().now().to_msg()
-            targets=[self.pose[:2]]
-            if self.controller.target is not None:targets.append(self.controller.target)
-            if hasattr(self.controller,'goal'):targets.append(self.controller.goal)
-            for point in targets:
-                world=np.asarray(point)@rotation(self.global_origin[2]).T+self.global_origin[:2]
-                item=PoseStamped(header=path.header);item.pose.position.x,item.pose.position.y=map(float,world);item.pose.orientation.w=1.
-                path.poses.append(item)
-            self.path.publish(path)
 
 
 def main(args=None):

@@ -20,7 +20,9 @@ This starts the controller idle with private preview commands. The existing
 `avoidance_drive:=true` option enables motor output; the start service remains
 required. See the [controller guide](../obstacle_avoidance_adv/README.md#start).
 Vizanti's field and 3D views draw the controller's selected goal as a yellow duck,
-including before movement starts. The visual path planner remains separate;
+including before movement starts. They also show a cyan LOCAL pose, a dashed
+goal reference, an orange current-action preview and a prominent controller state
+panel. The visual path planner remains separate;
 select the same run if using its additional path/marker overlays.
 
 ## Build and run

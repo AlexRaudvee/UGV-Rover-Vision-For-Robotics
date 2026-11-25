@@ -6,19 +6,21 @@ if (Number(process.versions.node.split('.')[0]) < 14 && !process.execArgv.includ
 const source = fs.readFileSync('src/ugv_else/vizanti/vizanti_server/public/templates/scene3d/scene3d_script.js','utf8')
     .replace(/^const \{rosbridge\} = await import.*$/m, 'const {rosbridge} = mocks;')
     .replace(/^const \{settings\} = await import.*$/m, 'const {settings} = mocks;')
-    .replace(/^const \{FieldClient, transformFieldPoint, drawGoalDuck\} = await import.*$/m, 'const {FieldClient, transformFieldPoint, drawGoalDuck} = mocks;');
+    .replace(/^const (\{FieldClient,.*\}) = await import.*$/m, 'const $1 = mocks;');
 let frame, rectangles=0, now=1000;
 let fieldClient, fieldClosed=false, groundFills=0, labels=[], duckPositions=[];
 const topics = {}, elements = {};
 const context = new Proxy({}, {get: (_, key) => key === 'fillRect' ? () => rectangles++ : key === 'fill' ? () => groundFills++ : key === 'fillText' ? text => labels.push(text) : key === 'translate' ? (x,y) => duckPositions.push([x,y]) : () => {}});
-for (const name of ['panel','canvas','follow','status','toggle','origin','clear','close','mode','field_view','markers_status'])
+for (const name of ['panel','canvas','follow','status','toggle','origin','clear','close','mode','field_view','markers_status',
+    'controller_panel','controller_state','controller_summary','controller_reason','controller_warning','controller_comparison'])
     elements[`{uniqueID}_${name}`] = {hidden:false, checked:false, clientWidth:1000, clientHeight:700,
-        isConnected:true, getContext:()=>context, addEventListener:()=>{}, setPointerCapture:()=>{}};
+        isConnected:true, style:{}, getContext:()=>context, addEventListener:()=>{}, setPointerCapture:()=>{}};
 const helperSource = fs.readFileSync('src/ugv_else/vizanti/vizanti_server/public/js/modules/football_field.js','utf8')
     .replace(/^import .*$/m,'').replace(/export /g, '');
-const helpers = vm.runInNewContext(`(()=>{${helperSource}; return {transformFieldPoint,markerVisuals,cameraFov,triangulationVisual,avoidanceGoalVisual,drawGoalDuck};})()`);
+const helpers = vm.runInNewContext(`(()=>{${helperSource}; return {transformFieldPoint,markerVisuals,cameraFov,triangulationVisual,avoidanceGoalVisual,drawGoalDuck,avoidanceMotionVisual,controllerStatusVisual,drawMotionOverlay,updateControllerPanel};})()`);
 const state = vm.createContext({mocks:{rosbridge:{ros:{},compression:'none'}, settings:{save(){}},
-    transformFieldPoint:helpers.transformFieldPoint, drawGoalDuck:helpers.drawGoalDuck, FieldClient:class {
+    transformFieldPoint:helpers.transformFieldPoint, drawGoalDuck:helpers.drawGoalDuck,
+    drawMotionOverlay:helpers.drawMotionOverlay, updateControllerPanel:helpers.updateControllerPanel, FieldClient:class {
         constructor(update){fieldClient=this;this.update=update;this.state=null;this.layout=null;this.connected=true;}
         bindControls(){} close(){fieldClosed=true;}
         get markerVisuals(){return helpers.markerVisuals(this.ranges,(now-1000)/1000,this.state && this.state.revision,this.layout && this.layout.frame_id);}
@@ -30,6 +32,9 @@ const state = vm.createContext({mocks:{rosbridge:{ros:{},compression:'none'}, se
         get localizationStatus(){return this.triangulationVisual ? 'Triangulation: 2 markers' : 'Triangulation stale';}
         get goalVisual(){return helpers.avoidanceGoalVisual(this.avoidance,(now-1000)/1000,
             this.layout && this.layout.frame_id);}
+        get motionVisual(){return helpers.avoidanceMotionVisual(this.motion,(now-1000)/1000,
+            this.layout && this.layout.frame_id,this.state);}
+        get controllerStatus(){return helpers.controllerStatusVisual(this.motion || this.avoidance,(now-1000)/1000);}
     }},
     document:{getElementById:id=>elements[id]}, performance:{now:()=>now},
     requestAnimationFrame:callback=>{frame=callback;}, atob: v=>Buffer.from(v,'base64').toString('binary'),
@@ -53,6 +58,7 @@ assert.equal(rectangles,2, 'byte-array cloud did not render');
 fieldClient.layout={frame_id:'map',ground_color:'#28753c',ground:[[-5.2,-3.7,0],[5.2,-3.7,0],[5.2,3.7,0],[-5.2,3.7,0]],
     lines:[{points:[[-4.5,-3,0],[4.5,-3,0]],color:'#ffffff',width_m:.05}]};
 fieldClient.state={aligned:true,odom_fresh:true,robot:[0,0,Math.PI/2],transform:[2,-1,Math.PI/2],revision:1,
+    session_id:'scene-test',
     start:{start_x_m:-3.2,start_y_m:0,start_heading_deg:0}};
 fieldClient.ranges={frame_id:'map',field_revision:1,stream_fresh:true,markers:[{
     id:2,map_position_m:[0,-.75,0],robot_position_m:[-3.2,0,0],range_m:3.286,
@@ -90,6 +96,25 @@ fieldClient.state.transform=[20,-10,-Math.PI/4];frame();
 assert.deepEqual(duckPositions[duckPositions.length-1],duckPosition,
     'field-frame duck was incorrectly transformed through odometry');
 fieldClient.state.transform=[2,-1,Math.PI/2];
+fieldClient.motion={frame_id:'map',session_id:'scene-test',revision:1,state:'PASS',readiness:'Ready',
+    reason:'Passing obstacle',motion_status:'Moving with bounded acceleration',goal:fieldClient.avoidance.goal,
+    navigation:{ready:true,distance_to_goal_m:4.2},local_pose:[-2.2,0,0],local_fresh:true,local_age_s:.05,local_timeout_s:1.5,
+    fused_pose:[-2.1,.2,.1],fused_age_s:.1,fused_timeout_s:1,distance_to_goal_m:4.2,
+    comparison:{distance_m:.22,heading_deg:5.7},
+    intent:{kind:'drive',path:[[-2.1,.2],[-1.7,.24]],label:'PASS · 0.70 m remaining'}};
+frame();
+assert(labels.includes('LOCAL (-2.20, 0.00)'),'local marker missing in 3D');
+assert(labels.includes('4.20 m to goal'),'goal reference line label missing in 3D');
+assert(labels.includes('PASS · 0.70 m remaining'),'action arrow missing in 3D');
+assert.equal(elements['{uniqueID}_controller_state'].textContent,'PASS');
+assert.match(elements['{uniqueID}_controller_comparison'].textContent,/0.22 m · 5.7°/);
+const activeMotion=fieldClient.motion;
+fieldClient.motion={...activeMotion,state:'FAULT',reason:'EKF input lost',intent:{kind:'stop',path:[]}};
+frame();
+assert.equal(elements['{uniqueID}_controller_state'].textContent,'FAULT');
+assert.equal(elements['{uniqueID}_controller_state'].style.color,'#ff7272');
+assert.equal(elements['{uniqueID}_controller_reason'].textContent,'EKF input lost');
+fieldClient.motion=activeMotion;
 elements['{uniqueID}_origin'].onclick();frame();
 elements['{uniqueID}_field_view'].onclick();frame();
 const beforeStale=rectangles;
@@ -98,6 +123,8 @@ labels=[];
 now=4000; frame();assert.equal(rectangles,beforeStale,'stale cloud remained visible');
 assert(!labels.some(text=>text.startsWith('TRIANGULATION')),'stale triangulation remained drawn in 3D');
 assert(!labels.some(text=>text.startsWith('RUN ')),'stale duck goal remained drawn in 3D');
+assert(!labels.some(text=>text.startsWith('LOCAL')),'stale local pose remained drawn in 3D');
+assert.equal(elements['{uniqueID}_controller_state'].textContent,'STATUS STALE');
 assert.equal(groundFills-fillsBeforeExpiry,2,'stale camera FOV remained visible in 3D');
 assert(labels.includes('ID 2 · not visible'),'stale marker distance remained visible in 3D');
 assert.match(elements['{uniqueID}_status'].textContent,/ODOM STALE/);

@@ -1,5 +1,14 @@
 <section id="{uniqueID}_panel" style="position:fixed;inset:70px 0 0;z-index:15;background:#101923;color:#e6edf3;touch-action:none">
   <canvas id="{uniqueID}_canvas" style="width:100%;height:100%;display:block;touch-action:none"></canvas>
+  <aside id="{uniqueID}_controller_panel" style="position:absolute;top:135px;right:16px;width:320px;max-width:calc(100% - 32px);box-sizing:border-box;background:#102526ed;border:2px solid #a8b8c7;border-radius:10px;padding:12px 15px;color:#f4f8fc;font:13px sans-serif;pointer-events:none;box-shadow:0 5px 20px #0006">
+    <div style="font-size:11px;letter-spacing:1.5px;color:#b9c9d7">AVOIDANCE CONTROLLER</div>
+    <strong id="{uniqueID}_controller_state" aria-live="polite" style="display:block;font-size:24px;margin:5px 0;overflow-wrap:anywhere">WAITING</strong>
+    <div id="{uniqueID}_controller_summary"></div>
+    <div id="{uniqueID}_controller_reason" style="margin-top:7px;color:#dce6e9;overflow-wrap:anywhere"></div>
+    <div id="{uniqueID}_controller_warning" style="color:#ffb454"></div>
+    <div id="{uniqueID}_controller_comparison" style="margin-top:9px;color:#63e5ff"></div>
+    <div style="margin-top:9px;font-size:11px;color:#a8b8c7">Cyan: LOCAL · yellow: goal reference<br>Orange: current turn / 2 s drive preview</div>
+  </aside>
   <div style="position:absolute;top:12px;left:16px;right:12px;font:14px sans-serif;pointer-events:none">
     <b id="{uniqueID}_mode">3D · football field</b> · drag to orbit · scroll to zoom<br>
     <span id="{uniqueID}_status">Waiting for odometry and depth…</span><br>

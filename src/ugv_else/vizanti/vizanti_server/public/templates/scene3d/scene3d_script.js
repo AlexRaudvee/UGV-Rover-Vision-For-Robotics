@@ -1,7 +1,7 @@
 // A perspective view over existing ROS messages; no new rendering dependency.
 const {rosbridge} = await import(`${base_url}/js/modules/rosbridge.js`);
 const {settings} = await import(`${base_url}/js/modules/persistent.js`);
-const {FieldClient, transformFieldPoint, drawGoalDuck} = await import(`${base_url}/js/modules/football_field.js`);
+const {FieldClient, transformFieldPoint, drawGoalDuck, drawMotionOverlay, updateControllerPanel} = await import(`${base_url}/js/modules/football_field.js`);
 const el = name => document.getElementById(`{uniqueID}_${name}`);
 const panel = el('panel'), canvas = el('canvas'), ctx = canvas.getContext('2d');
 const config = settings['{uniqueID}'] || {enabled: true};
@@ -97,6 +97,8 @@ function render() {
     const w = panel.clientWidth, h = panel.clientHeight;
     if (canvas.width !== w || canvas.height !== h) { canvas.width=w; canvas.height=h; }
     ctx.clearRect(0,0,w,h);
+    const motion=field.motionVisual;
+    updateControllerPanel(el,field.controllerStatus,motion);
     const transform = field.state?.aligned ? field.state.transform : null;
     const toField = point => transform ? transformFieldPoint(transform, point) : point;
     const displayRobot = robot && (!field.layout || transform) ? {
@@ -190,6 +192,7 @@ function render() {
         const label=project([x,y,.4]);
         if (label) { ctx.fillStyle=color; ctx.font='bold 13px sans-serif'; ctx.fillText(triangulated.text,label[0]+8,label[1]+16); }
     }
+    drawMotionOverlay(ctx,motion,project);
     if(displayRobot) {
         const r=displayRobot;
         const body=(x,y,z)=>[r.x+Math.cos(r.yaw)*x-Math.sin(r.yaw)*y,r.y+Math.sin(r.yaw)*x+Math.cos(r.yaw)*y,z];
@@ -204,7 +207,7 @@ function render() {
         const label=project(body(0,0,.32));
         if (label) {
             ctx.fillStyle='#f7c76b'; ctx.font='bold 13px sans-serif';
-            ctx.fillText(`ODOM (${r.x.toFixed(2)}, ${r.y.toFixed(2)})`,label[0]+8,label[1]-8);
+            ctx.fillText(`${field.state?.pose_source === 'marker_ekf' ? 'FUSED' : 'ODOM'} (${r.x.toFixed(2)}, ${r.y.toFixed(2)})`,label[0]+8,label[1]-8);
         }
     }
     const goal = layout ? field.goalVisual : null;

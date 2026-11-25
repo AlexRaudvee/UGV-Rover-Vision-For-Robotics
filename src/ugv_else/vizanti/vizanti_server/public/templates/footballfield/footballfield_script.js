@@ -1,4 +1,4 @@
-const {FieldClient, drawGoalDuck} = await import(`${base_url}/js/modules/football_field.js`);
+const {FieldClient, drawGoalDuck, drawMotionOverlay, updateControllerPanel} = await import(`${base_url}/js/modules/football_field.js`);
 const {view} = await import(`${base_url}/js/modules/view.js`);
 const {tf} = await import(`${base_url}/js/modules/tf.js`);
 const {settings} = await import(`${base_url}/js/modules/persistent.js`);
@@ -30,6 +30,8 @@ function render(now) {
     lastDraw = now;
     canvas.width = window.innerWidth; canvas.height = window.innerHeight;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const motion=field.motionVisual;
+    updateControllerPanel(el,field.controllerStatus,motion);
     const layout = field.layout;
     if (!layout) { el('status').textContent = 'Waiting for /football_field/layout'; return; }
     if (tf.fixed_frame !== layout.frame_id && !tf.absoluteTransforms[layout.frame_id]) {
@@ -74,6 +76,7 @@ function render(now) {
         ctx.fillStyle = marker.color; ctx.font = 'bold 14px sans-serif';
         ctx.fillText(marker.text, p.x+12, p.y-10);
     }
+    drawMotionOverlay(ctx,motion,p=>{const s=screen(p);return [s.x,s.y];});
     for (const pose of [field.odomVisual, field.triangulationVisual].filter(Boolean)) {
         const p = screen(pose.position);
         ctx.strokeStyle = pose.color; ctx.lineWidth = 2.5;

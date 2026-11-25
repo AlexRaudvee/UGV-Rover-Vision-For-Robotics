@@ -93,17 +93,138 @@ export function drawGoalDuck(ctx, x, y, size = 36) {
     ctx.restore();
 }
 
+const finitePose = p => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite);
+
+export function avoidanceMotionVisual(data, ageSeconds, frame, field) {
+    if (!data || data.frame_id !== frame || !frame || !Number.isFinite(ageSeconds) ||
+        ageSeconds < 0 || ageSeconds > 1) return null;
+    const referenceMatches = field && data.session_id === field.session_id && data.revision === field.revision;
+    const local = referenceMatches && data.local_fresh && finitePose(data.local_pose) &&
+        Number.isFinite(data.local_age_s) && data.local_age_s >= -.1 &&
+        Number.isFinite(data.local_timeout_s) && data.local_timeout_s > 0 &&
+        data.local_age_s + ageSeconds <= data.local_timeout_s ? data.local_pose : null;
+    const fused = finitePose(data.fused_pose) && Number.isFinite(data.fused_age_s) && data.fused_age_s >= -.1 &&
+        Number.isFinite(data.fused_timeout_s) && data.fused_timeout_s > 0 &&
+        data.fused_age_s + ageSeconds <= data.fused_timeout_s ? data.fused_pose : null;
+    const goal = avoidanceGoalVisual({goal: data.goal}, ageSeconds, frame);
+    const intent = local && fused && data.intent && ['stop','turn','drive','reverse'].includes(data.intent.kind) &&
+        Array.isArray(data.intent.path) && data.intent.path.length <= 64 &&
+        data.intent.path.every(p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite)) ? data.intent : null;
+    return {local, fused, goal, intent,
+        comparison: local && fused && data.comparison && Number.isFinite(data.comparison.distance_m) &&
+            Number.isFinite(data.comparison.heading_deg) ? data.comparison : null,
+        distance: Number.isFinite(data.distance_to_goal_m) ? data.distance_to_goal_m : null};
+}
+
+export function controllerStatusVisual(status, ageSeconds) {
+    if (!status || typeof status.state !== 'string') return {state:'CONTROLLER OFFLINE', color:'#a8b8c7',
+        summary:'Waiting for avoidance controller', reason:'', comparison:''};
+    if (!Number.isFinite(ageSeconds) || ageSeconds < 0 || ageSeconds > 2.5)
+        return {state:'STATUS STALE', color:'#ffb454', summary:`Last state: ${status.state}`,
+            reason:'Controller status stopped arriving', comparison:''};
+    const active = !['IDLE','DONE','FAULT'].includes(status.state);
+    const hold = active && status.readiness !== 'Ready';
+    const waiting = active && !hold && /^Waiting/.test(status.motion_status || '');
+    const nav = status.navigation || {}, goal = status.goal || {};
+    const run = Number.isInteger(goal.target_run) ? goal.target_run : nav.target_run;
+    const name = goal.target_name || nav.target_name || '';
+    const distance = nav.ready && Number.isFinite(nav.distance_to_goal_m) ? ` · ${nav.distance_to_goal_m.toFixed(2)} m to goal` : '';
+    return {state: `${hold ? 'HOLD · ' : waiting ? 'WAIT · ' : ''}${status.state}`,
+        color: status.state === 'FAULT' ? '#ff7272' : hold || waiting || status.state === 'STOP' ? '#ffb454' :
+            status.state === 'DONE' ? '#79e5a2' : status.state === 'IDLE' ? '#b9c9d7' : '#f4f8fc',
+        summary: `${run ? `Run ${run}` : 'Distance mission'}${name ? ` · ${name}` : ''}${distance}`,
+        reason: hold ? status.readiness : waiting ? status.motion_status :
+            status.state === 'IDLE' && status.readiness !== 'Ready' ? status.readiness || 'Waiting for inputs' : status.reason || '',
+        warning: status.ekf_warning || (status.ekf?.fresh ? status.ekf.uncertainty_reason : '') || '',
+        comparison:''};
+}
+
+export function updateControllerPanel(element, status, motion) {
+    const comparison = motion?.comparison;
+    const text = (name,value) => { const node=element(name); if(node.textContent!==value) node.textContent=value; };
+    text('controller_state',status.state);
+    element('controller_state').style.color = status.color;
+    element('controller_panel').style.borderColor = status.color;
+    text('controller_summary',status.summary);
+    text('controller_reason',status.reason);
+    text('controller_warning',status.warning ? `Warning: ${status.warning}` : '');
+    text('controller_comparison',comparison ?
+        `LOCAL ↔ EKF (matched): ${comparison.distance_m.toFixed(2)} m · ${comparison.heading_deg.toFixed(1)}°` :
+        'LOCAL ↔ EKF: comparison unavailable');
+}
+
+// Both renderers pass a field-point projection; every overlay uses the same geometry.
+export function drawMotionOverlay(ctx, motion, project) {
+    if (!motion) return;
+    const point = p => project([p[0],p[1],.045]);
+    const label = (text,p,color) => {
+        ctx.font='bold 12px sans-serif'; ctx.lineWidth=4; ctx.strokeStyle='#142b29';
+        ctx.strokeText(text,p[0]+12,p[1]+18); ctx.fillStyle=color; ctx.fillText(text,p[0]+12,p[1]+18);
+    };
+    const segment = (a,b,color,dashed=false) => {
+        if (!a || !b) return;
+        ctx.strokeStyle=color; ctx.lineWidth=2; ctx.setLineDash(dashed ? [6,5] : []);
+        ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke(); ctx.setLineDash([]);
+    };
+    ctx.save();
+    const fused = motion.fused ? point(motion.fused) : null;
+    if (fused && motion.goal) {
+        const goal = point(motion.goal.position);
+        segment(fused,goal,'#ffe16a',true);
+        if (goal && motion.distance !== null) label(`${motion.distance.toFixed(2)} m to goal`,
+            [(fused[0]+goal[0])/2,(fused[1]+goal[1])/2],'#ffe16a');
+    }
+    if (motion.local) {
+        const p=point(motion.local), h=motion.local[2];
+        const end=point([motion.local[0]+.4*Math.cos(h),motion.local[1]+.4*Math.sin(h)]);
+        if (p) {
+            segment(p,fused,'#63e5ff',true);
+            ctx.strokeStyle='#63e5ff'; ctx.lineWidth=2.5;
+            ctx.beginPath(); ctx.arc(p[0],p[1],12,0,Math.PI*2); ctx.stroke();
+            segment(p,end,'#63e5ff');
+            if (end) {
+                const a=Math.atan2(end[1]-p[1],end[0]-p[0]);
+                ctx.beginPath(); ctx.moveTo(end[0]-8*Math.cos(a-.5),end[1]-8*Math.sin(a-.5));
+                ctx.lineTo(end[0],end[1]);ctx.lineTo(end[0]-8*Math.cos(a+.5),end[1]-8*Math.sin(a+.5));ctx.stroke();
+            }
+            label(`LOCAL (${motion.local[0].toFixed(2)}, ${motion.local[1].toFixed(2)})`,p,'#63e5ff');
+        }
+    }
+    const intent=motion.intent;
+    if (intent) {
+        if (intent.kind === 'stop' && fused) {
+            ctx.strokeStyle='#ffad50';ctx.lineWidth=2.5;
+            ctx.strokeRect(fused[0]-5,fused[1]-34,10,10);
+            label('STOPPED',[fused[0],fused[1]-34],'#ffad50');
+        } else {
+            const path=intent.path.map(point);
+            for(let i=1;i<path.length;i++) segment(path[i-1],path[i],'#ffad50');
+            if (path.length>1 && path.every(Boolean)) {
+                const end=path[path.length-1],prev=path[path.length-2];
+                const a=Math.atan2(end[1]-prev[1],end[0]-prev[0]);
+                ctx.strokeStyle='#ffad50';ctx.lineWidth=2.5;
+                ctx.beginPath();ctx.moveTo(end[0]-9*Math.cos(a-.5),end[1]-9*Math.sin(a-.5));
+                ctx.lineTo(end[0],end[1]);ctx.lineTo(end[0]-9*Math.cos(a+.5),end[1]-9*Math.sin(a+.5));ctx.stroke();
+                label(intent.label,end,'#ffad50');
+            }
+        }
+    }
+    ctx.restore();
+}
+
 export class FieldClient {
     constructor(onUpdate = () => {}) {
         this.layout = this.state = this.ranges = this.camera = this.triangulation = this.avoidance = null;
         this.lastState = this.lastRanges = this.lastCamera = this.lastTriangulation = 0;
         this.lastAvoidance = 0;
+        this.motion = null; this.lastMotion = 0;
         this.listeners = new Set([onUpdate]);
-        this.topics = ['layout', 'state', 'ranges', 'camera', 'triangulation', 'avoidance'].map(kind => {
+        this.topics = ['layout', 'state', 'ranges', 'camera', 'triangulation', 'avoidance', 'motion'].map(kind => {
             const name = kind === 'ranges' ? '/marker_ranges/result' :
                 kind === 'camera' ? '/marker_pan_tracker/state' :
                 kind === 'triangulation' ? '/marker_triangulation/result' :
-                kind === 'avoidance' ? '/obstacle_avoidance_adv/status' : `/football_field/${kind}`;
+                kind === 'avoidance' ? '/obstacle_avoidance_adv/status' :
+                kind === 'motion' ? '/obstacle_avoidance_adv/visualization' : `/football_field/${kind}`;
             const topic = new ROSLIB.Topic({ros: rosbridge.ros, name,
                 messageType: 'std_msgs/msg/String', compression: rosbridge.compression,
                 queue_length: 1});
@@ -115,6 +236,7 @@ export class FieldClient {
                     if (kind === 'camera') this.lastCamera = performance.now();
                     if (kind === 'triangulation') this.lastTriangulation = performance.now();
                     if (kind === 'avoidance') this.lastAvoidance = performance.now();
+                    if (kind === 'motion') this.lastMotion = performance.now();
                     for (const listener of this.listeners) listener();
                 } catch (error) { console.warn('Football field message:', error); }
             });
@@ -122,6 +244,16 @@ export class FieldClient {
         });
     }
     get connected() { return this.lastState > 0 && performance.now() - this.lastState < 2500; }
+    get motionVisual() {
+        return avoidanceMotionVisual(this.motion,(performance.now()-this.lastMotion)/1000,
+            this.layout?.frame_id,this.state);
+    }
+    get controllerStatus() {
+        const motionAge=(performance.now()-this.lastMotion)/1000;
+        if (this.motion && motionAge>=0 && motionAge<=1)
+            return controllerStatusVisual(this.motion,motionAge);
+        return controllerStatusVisual(this.avoidance,(performance.now()-this.lastAvoidance)/1000);
+    }
     get goalVisual() {
         return avoidanceGoalVisual(this.avoidance, (performance.now()-this.lastAvoidance)/1000,
             this.layout?.frame_id);

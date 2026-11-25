@@ -8,8 +8,9 @@ const listeners={}, elements={}, calls=[], drawn=[];
 let frame, now=1000;
 const ctx=new Proxy({}, {get:(_,name)=> (...args)=>drawn.push([name,...args])});
 for(const name of ['canvas','status','fit','save_start','apply_start','config_file','start_status','markers_status',
-                  'start_x_m','start_y_m','start_heading_deg']) {
-    elements[`{uniqueID}_${name}`]={isConnected:true,value:'',dataset:{fieldKey:name},
+                  'start_x_m','start_y_m','start_heading_deg','controller_panel','controller_state',
+                  'controller_summary','controller_reason','controller_warning','controller_comparison']) {
+    elements[`{uniqueID}_${name}`]={isConnected:true,value:'',style:{},dataset:{fieldKey:name},
         addEventListener(event,cb){this[event]=cb;},getContext:()=>ctx};
     let value='';
     Object.defineProperty(elements[`{uniqueID}_${name}`],'value',
@@ -32,7 +33,7 @@ const state=vm.createContext({mocks,console,performance:{now:()=>now},
     },ServiceRequest:class {constructor(values){Object.assign(this,values);}}}});
 const moduleSource=fs.readFileSync(base+'js/modules/football_field.js','utf8')
     .replace(/^import .*$/m,'const {rosbridge}=mocks;').replace(/export /g,'');
-    vm.runInContext(`Object.assign(mocks,(()=>{${moduleSource};return {FieldClient,transformFieldPoint,markerVisuals,cameraFov,triangulationVisual,avoidanceGoalVisual,drawGoalDuck};})());`,state);
+    vm.runInContext(`Object.assign(mocks,(()=>{${moduleSource};return {FieldClient,transformFieldPoint,markerVisuals,cameraFov,triangulationVisual,avoidanceGoalVisual,drawGoalDuck,avoidanceMotionVisual,controllerStatusVisual,drawMotionOverlay,updateControllerPanel};})());`,state);
 const source=fs.readFileSync(base+'templates/footballfield/footballfield_script.js','utf8')
     .replace(/^const (\{.*\}) = await import.*$/gm,'const $1 = mocks;');
 vm.runInContext(source,state);
@@ -40,6 +41,7 @@ listeners['/football_field/layout']({data:JSON.stringify({frame_id:'map',length_
     ground_color:'#28753c',ground:[[-5.2,-3.7,0],[5.2,-3.7,0],[5.2,3.7,0],[-5.2,3.7,0]],
     lines:[{points:[[-4.5,-3,0],[4.5,-3,0]],color:'#fff',width_m:.05}]})});
 const fieldState={config_file:'/workspace/football_field.yaml',frame_id:'map',robot:[-3.2,0,0],aligned:true,odom_fresh:true,publish_tf:true,revision:2,
+    session_id:'field-test',
     start:{start_x_m:-3.2,start_y_m:0,start_heading_deg:0},error:''};
 listeners['/football_field/state']({data:JSON.stringify(fieldState)});
 const ranges={frame_id:'map',field_revision:2,stream_fresh:true,error:'',markers:[{
@@ -108,11 +110,42 @@ async function main(){
     drawn.length=0;
     listeners['/obstacle_avoidance_adv/status']({data:JSON.stringify({state:'IDLE',goal:{
         ...avoidance.goal,target_run:5,target_name:'Penalty area corner left',position_m:[2.85,-2]}})});
+    const motion={frame_id:'map',session_id:'field-test',revision:2,state:'SIDESTEP',
+        readiness:'Ready',ekf_warning:'EKF position uncertainty 0.90 m exceeds limit 0.80 m',
+        reason:'Following committed sidestep',motion_status:'Moving with bounded acceleration',
+        navigation:{ready:true,distance_to_goal_m:5.4},goal:{...avoidance.goal,target_run:5,
+            target_name:'Penalty area corner left',position_m:[2.85,-2]},
+        local_pose:[-2.2,0,0],local_fresh:true,local_age_s:.05,local_timeout_s:1.5,
+        fused_pose:[-2.1,.2,.1],fused_age_s:.1,fused_timeout_s:1,
+        comparison:{distance_m:Math.hypot(.1,.2),heading_deg:.1*180/Math.PI},distance_to_goal_m:5.4,
+        intent:{kind:'drive',path:[[-2.1,.2],[-1.7,.24]],label:'SIDESTEP · 0.40 m remaining'}};
+    listeners['/obstacle_avoidance_adv/visualization']({data:JSON.stringify(motion)});
     listeners['/marker_triangulation/result']({data:JSON.stringify({...fix,fresh:false,error:'need at least two markers'})});
     frame(1100);
     assert(drawn.some(d=>d[0]==='fillText' && d[1]==='RUN 5 · Penalty area corner left (2.85, -2.00)'),
         'changing selected run did not move the duck');
     assert(!drawn.some(d=>d[0]==='fillText' && d[1].startsWith('RUN 1')),'previous goal remained drawn');
+    assert(drawn.some(d=>d[0]==='fillText' && d[1]==='LOCAL (-2.20, 0.00)'),
+        'local wheel/gyro marker missing');
+    assert(drawn.some(d=>d[0]==='lineTo' && d[1]===642.5 && d[2]===500),
+        'reference line did not reach the selected field goal');
+    assert(drawn.some(d=>d[0]==='fillText' && d[1]==='SIDESTEP · 0.40 m remaining'),
+        'current motion intent missing');
+    assert.equal(elements['{uniqueID}_controller_state'].textContent,'SIDESTEP');
+    assert.match(elements['{uniqueID}_controller_comparison'].textContent,/0.22 m · 5.7°/);
+    assert.equal(mocks.avoidanceMotionVisual(motion,2,'map',fieldState),null);
+    assert.equal(mocks.avoidanceMotionVisual(motion,0,'odom',fieldState),null);
+    assert.equal(mocks.avoidanceMotionVisual(motion,0,'map',{...fieldState,revision:3}).local,null,
+        'old local alignment was reused after reset');
+    assert.equal(mocks.avoidanceMotionVisual({...motion,local_age_s:1.45},.1,'map',fieldState).local,null);
+    assert.equal(mocks.avoidanceMotionVisual({...motion,fused_age_s:.95},.1,'map',fieldState).fused,null);
+    assert.match(elements['{uniqueID}_controller_warning'].textContent,/Warning: EKF position uncertainty/);
+    const held=mocks.controllerStatusVisual({...motion,readiness:'EKF pose is stale'},0);
+    assert.equal(held.state,'HOLD · SIDESTEP');assert.match(held.reason,/stale/);
+    const fault=mocks.controllerStatusVisual({...motion,state:'FAULT',reason:'Mission timeout'},0);
+    assert.equal(fault.state,'FAULT');assert.equal(fault.color,'#ff7272');
+    assert.equal(mocks.controllerStatusVisual(motion,3).state,'STATUS STALE');
+    assert.equal(mocks.controllerStatusVisual(null,0).state,'CONTROLLER OFFLINE');
     assert(!drawn.some(d=>d[0]==='fillText' && d[1].startsWith('TRIANGULATION')),'invalidated fix remained drawn');
     assert.match(elements['{uniqueID}_markers_status'].textContent,/need at least two markers/);
     const input=elements['{uniqueID}_start_x_m']; input.value='1.25';input.input();
@@ -143,6 +176,8 @@ async function main(){
     drawn.length=0;now=4000;frame(1300);
     assert(!drawn.some(d=>d[0]==='fillText' && d[1].startsWith('RUN ')),
         '2D renderer retained a stale goal after controller status stopped');
+    assert(!drawn.some(d=>d[0]==='fillText' && d[1].startsWith('LOCAL')),'stale local pose remained drawn');
+    assert.equal(elements['{uniqueID}_controller_state'].textContent,'STATUS STALE');
     now=1000;
     listeners['/football_field/state']({data:JSON.stringify({...fieldState,publish_tf:false,
         start_control_enabled:false,pose_source:'external'})});
