@@ -66,6 +66,16 @@ def test_zero_tags_sweeps_both_limits_until_a_tag_reappears():
     assert c.mode == 'tracking_markers'
 
 
+def test_relocalization_points_toward_recent_requested_tag_then_resumes_normal_sweep():
+    c = PanController([2, 3], one_marker='search')
+    c.observe({2: -20., 3: 40.}, 0.)
+    c.start_relocalization(2, 2.)
+    assert c.step(.1, 2., relocalizing=True) == pytest.approx(-.8)
+    assert c.mode == 'relocalizing_toward_last_tag'
+    c.step(.1, 2.1, relocalizing=False)
+    assert c.mode == 'searching_without_markers'
+
+
 def test_deadband_stops_noise_and_smoothing_reduces_a_bad_frame():
     c = PanController([2, 3], deadband=3, alpha=.25)
     for frame in range(20):

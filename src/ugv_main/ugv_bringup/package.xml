@@ -37,6 +37,7 @@
   <exec_depend>polar_hist</exec_depend>
   <exec_depend>detection_improved</exec_depend>
   <exec_depend>obstacle_avoidance_adv</exec_depend>
+  <exec_depend>l2s3_curling</exec_depend>
   <export>
     <build_type>ament_python</build_type>
   </export>

@@ -55,7 +55,7 @@ const fix={fresh:true,frame_id:'map',field_revision:2,position_m:[-2.9,.2,0],hea
     odom_position_m:[-3.2,0,0],position_delta_m:.36,age_s:.1,stale_after_s:1,used_ids:['tag:0','tag:5']};
 listeners['/marker_triangulation/result']({data:JSON.stringify(fix)});
 const avoidance={state:'IDLE',goal:{frame_id:'map',position_m:[3.2,0],target_run:1,target_name:'Penalty mark'}};
-listeners['/obstacle_avoidance_adv/status']({data:JSON.stringify(avoidance)});
+listeners['/curling_controller/status']({data:JSON.stringify(avoidance)});
 frame(1000);
 assert(drawn.some(d=>d[0]==='fillText' && d[1]==='RUN 1 · Penalty mark (3.20, 0.00)'),
     'selected goal missing before the mission starts');
@@ -107,8 +107,13 @@ assert.equal(elements['{uniqueID}_save_start'].disabled,false);
 const mapped=mocks.transformFieldPoint([2,-1,Math.PI/2],[1,2,3]);
 assert(Math.abs(mapped[0])<1e-12 && Math.abs(mapped[1])<1e-12 && mapped[2]===3);
 async function main(){
+    const standalone = Object.create(mocks.FieldClient.prototype);
+    standalone.avoidance = {state:'STOP', readiness:'Ready', reason:'Stopping before obstacle'};
+    standalone.lastAvoidance = state.performance.now();
+    assert.equal(standalone.controllerStatus.state,'STOP');
+    assert.equal(standalone.goalVisual,null,'standalone avoidance should have no curling goal');
     drawn.length=0;
-    listeners['/obstacle_avoidance_adv/status']({data:JSON.stringify({state:'IDLE',goal:{
+    listeners['/curling_controller/status']({data:JSON.stringify({state:'IDLE',goal:{
         ...avoidance.goal,target_run:5,target_name:'Penalty area corner left',position_m:[2.85,-2]}})});
     const motion={frame_id:'map',session_id:'field-test',revision:2,state:'SIDESTEP',
         readiness:'Ready',ekf_warning:'EKF position uncertainty 0.90 m exceeds limit 0.80 m',
@@ -119,7 +124,7 @@ async function main(){
         fused_pose:[-2.1,.2,.1],fused_age_s:.1,fused_timeout_s:1,
         comparison:{distance_m:Math.hypot(.1,.2),heading_deg:.1*180/Math.PI},distance_to_goal_m:5.4,
         intent:{kind:'drive',path:[[-2.1,.2],[-1.7,.24]],label:'SIDESTEP · 0.40 m remaining'}};
-    listeners['/obstacle_avoidance_adv/visualization']({data:JSON.stringify(motion)});
+    listeners['/curling_controller/visualization']({data:JSON.stringify(motion)});
     listeners['/marker_triangulation/result']({data:JSON.stringify({...fix,fresh:false,error:'need at least two markers'})});
     frame(1100);
     assert(drawn.some(d=>d[0]==='fillText' && d[1]==='RUN 5 · Penalty area corner left (2.85, -2.00)'),

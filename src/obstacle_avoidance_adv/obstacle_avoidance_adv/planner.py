@@ -23,65 +23,6 @@ def rotation(angle):
     c,s=math.cos(angle),math.sin(angle)
     return np.array([[c,-s],[s,c]])
 
-def relative_pose(pose, origin):
-    """Convert a field pose into coordinates relative to the assumed start.
-
-    pose: current (x metres, y metres, heading radians).
-    origin: assumed starting (x metres, y metres, heading radians).
-    Assumes the starting heading is zero.
-    """
-
-    # Convert the current pose into a NumPy array of floating-point numbers.
-    pose = np.asarray(pose, dtype=float)
-
-    # Convert the assumed starting pose into the same array format.
-    origin = np.asarray(origin, dtype=float)
-
-    # Require both arrays to contain exactly three values: x, y and heading.
-    if pose.shape != (3,) or origin.shape != (3,):
-        # Reject inputs with missing values, extra values or incorrect dimensions.
-        raise ValueError('Pose and origin must each contain three values')
-
-    # Check that every input value is a real, finite number—not NaN or infinity.
-    if not np.isfinite(pose).all() or not np.isfinite(origin).all():
-        # Reject invalid numbers before they reach the navigation calculations.
-        raise ValueError('Pose and origin must contain only finite values')
-
-    # Subtract starting x and y from current x and y.
-    # No rotation is needed because the starting heading is zero.
-    position = pose[:2] - origin[:2]
-
-    # Keep the current heading, normalized to the range -pi to +pi.
-    heading = wrap(pose[2])
-
-    # Return the relative x, relative y and current heading as one NumPy array.
-    return np.array([position[0], position[1], heading])
-    
-def ekf_goal_guidance(goal_map, ekf_pose, motion_at_capture, motion_now):
-    """Express a fixed map goal in the continuous wheel/gyro motion frame.
-
-    The EKF and motion_at_capture must refer to the same acquisition time.
-    Return the local goal and the EKF pose advanced by subsequent local motion.
-    """
-    goal_map = np.asarray(goal_map, dtype=float)
-    ekf_pose = np.asarray(ekf_pose, dtype=float)
-    motion_at_capture = np.asarray(motion_at_capture, dtype=float)
-    motion_now = np.asarray(motion_now, dtype=float)
-    if (goal_map.shape != (2,) or any(p.shape != (3,) for p in
-            (ekf_pose, motion_at_capture, motion_now))
-            or not all(np.isfinite(p).all() for p in
-                       (goal_map, ekf_pose, motion_at_capture, motion_now))):
-        raise ValueError('Goal and navigation poses must have valid dimensions and finite values')
-
-    # Align headings as well as positions; these are different coordinate frames.
-    heading_offset = wrap(ekf_pose[2] - motion_at_capture[2])
-    goal_motion = motion_at_capture[:2] + rotation(-heading_offset) @ (goal_map - ekf_pose[:2])
-
-    # Account for movement since the EKF sample without moving the fixed map goal.
-    position_map = ekf_pose[:2] + rotation(heading_offset) @ (motion_now[:2] - motion_at_capture[:2])
-    pose_map = np.array([position_map[0], position_map[1], wrap(motion_now[2] + heading_offset)])
-    return goal_motion, pose_map
-
 
 @dataclass
 class Settings:
@@ -102,7 +43,6 @@ class Settings:
     reaction_time: float = .20
     heading_tolerance: float = .04
     distance_tolerance: float = .035
-    goal_tolerance_m: float = .08
     settle_time: float = .25
     minimum_coverage: float = .65
     mission_timeout: float = 180.
@@ -340,15 +280,6 @@ class Controller:
         self.leg_heading=0.;self.target=self.goal.copy();self.change('APPROACH',now,'Driving to original endpoint')
         self.progress_pose=np.array(pose);self.progress_at=now
 
-    def set_goal(self,goal):
-        """Update the goal representation without changing a committed bypass."""
-        goal=np.asarray(goal,dtype=float)
-        if goal.shape!=(2,) or not np.isfinite(goal).all():
-            raise ValueError('Goal must contain two finite coordinates')
-        self.goal=goal.copy()
-        if self.state in ('APPROACH','REJOIN'):
-            self.target=self.goal.copy()
-
     def change(self,state,now,reason):
         self.state=state;self.entered=now;self.reason=reason;self.settled_since=None
 
@@ -357,18 +288,6 @@ class Controller:
 
     def fail(self,reason):
         self.state='FAULT';self.reason=reason;return 0.,0.
-
-    def finish_if_at_goal(self,distance,now,source='Estimated'):
-        """Arrival takes priority over every active manoeuvre, including backing up."""
-        if not self.active:
-            return False
-        if not math.isfinite(distance) or distance<0:
-            raise ValueError('Goal distance must be finite and nonnegative')
-        if distance<=self.cfg.goal_tolerance_m+1e-9:
-            self.change('DONE',now,f'{source} target reached: {distance:.3f} m '
-                        f'<= {self.cfg.goal_tolerance_m:.3f} m')
-            return True
-        return False
 
     def speed_limit(self,available,ceiling,age):
         a=self.cfg.braking_deceleration;t=self.cfg.reaction_time+age
@@ -415,14 +334,10 @@ class Controller:
         self.reason=f'{self.state}: clearance {clearance:.2f} m, remaining {remaining:.2f} m'
         return speed*max(0.,math.cos(error)),float(np.clip(1.5*error,-.3,.3)) if abs(error)>.025 else 0.
 
-    def step(self,pose,view,now,yaw_rate=0.,measured_speed=0.,arrival_distance=None):
+    def step(self,pose,view,now,yaw_rate=0.,measured_speed=0.):
         if not self.active:return 0.,0.
         self.now=now
         pose=np.asarray(pose)
-        # ROS supplies the validated FUSED distance. Standalone simulations retain local arrival.
-        distance=float(np.linalg.norm(self.goal-pose[:2])) if arrival_distance is None else arrival_distance
-        if self.finish_if_at_goal(distance,now,'Estimated' if arrival_distance is None else 'FUSED'):
-            return 0.,0.
         if now-self.started>self.cfg.mission_timeout:return self.fail('Mission timeout')
         if np.linalg.norm(pose[:2]-self.progress_pose[:2])>.03 or abs(wrap(pose[2]-self.progress_pose[2]))>.05:
             self.progress_pose=pose.copy();self.progress_at=now
@@ -436,6 +351,8 @@ class Controller:
         if view.rotation_clear():self.backoff_start=None
         if self.state in ('APPROACH','REJOIN'):
             delta=self.goal-pose[:2];distance=float(np.linalg.norm(delta))
+            if distance<=.08:
+                self.change('DONE',now,'Original endpoint reached');return 0.,0.
             heading=math.atan2(delta[1],delta[0]);error=wrap(heading-pose[2])
             if abs(error)<.20 and view.clearance(error)<=self.cfg.gap_lookahead and self.enter_gap(pose,view,heading,now):
                 return 0.,0.

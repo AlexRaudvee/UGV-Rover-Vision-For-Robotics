@@ -62,7 +62,9 @@ class PanTracker(Node):
         # Manual camera control (e.g. a game controller): commands on this topic take
         # over the camera; tracking resumes manual_hold_s seconds after the last one.
         self.manual = None          # (monotonic time, pan_deg, tilt_deg)
+        self.relocalize_until = 0.
         self.create_subscription(JointState, '/localization/pan_tilt_manual', self.on_manual, 1)
+        self.create_subscription(String, '/localization/relocalize_camera', self.on_relocalize, 1)
         self.pub = self.create_publisher(JointState, '/localization/pan_tilt_command', 1)
         self.state_pub = self.create_publisher(String, '~/state', 1)
         self.create_subscription(String, '/marker_detector/detections', self.on_detections, 1)
@@ -145,6 +147,25 @@ class PanTracker(Node):
         except (ValueError, KeyError, TypeError, ZeroDivisionError):
             return
 
+    def on_relocalize(self, message):
+        try:
+            request = json.loads(message.data)
+            deadline = float(request['deadline_s'])
+            marker_id = request.get('marker_id')
+            if marker_id is not None and type(marker_id) is not int:
+                return
+            remaining = deadline - self.get_clock().now().nanoseconds/1e9
+            if not math.isfinite(remaining) or remaining > 8.1:
+                return
+            if remaining <= 0.:
+                self.relocalize_until = 0.
+                return
+            now = time.monotonic()
+            self.relocalize_until = now + min(remaining, 8.)
+            self.control.start_relocalization(marker_id, now)
+        except (ValueError, KeyError, TypeError):
+            return
+
     def tick(self):
         now = time.monotonic()
         if self.last_head_received is None or now-self.last_head_received > 1:
@@ -156,7 +177,7 @@ class PanTracker(Node):
             self.control.pan = pan          # tracking continues from here afterwards
             self.control.mode = 'manual'
         else:
-            pan = self.control.step(now-self.last_tick, now)
+            pan = self.control.step(now-self.last_tick, now, relocalizing=now < self.relocalize_until)
             tilt = self.p['tilt_deg']
         self.last_tick = now
         message = JointState()

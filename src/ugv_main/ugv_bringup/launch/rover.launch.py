@@ -3,7 +3,8 @@
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, SetEnvironmentVariable,
+    DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, OpaqueFunction,
+    SetEnvironmentVariable, SetLaunchConfiguration,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -23,6 +24,22 @@ def include(package, filename, enabled, **arguments):
     )])
 
 
+def select_motion_controller(context):
+    avoidance = LaunchConfiguration('avoidance').perform(context).lower() == 'true'
+    curling = LaunchConfiguration('curling').perform(context).lower() == 'true'
+    if avoidance and curling:
+        raise ValueError('Select either avoidance:=true or curling:=true for a rover launch')
+
+    # Preserve the previous launch spelling for explicit numbered curling runs.
+    legacy_curling = avoidance and LaunchConfiguration('target_run').perform(context) != '0'
+    drive_arg = 'avoidance_drive' if legacy_curling else 'curling_drive'
+    return [
+        SetLaunchConfiguration('run_avoidance_controller', str(avoidance and not legacy_curling).lower()),
+        SetLaunchConfiguration('run_curling_controller', str(curling or legacy_curling).lower()),
+        SetLaunchConfiguration('run_curling_drive', LaunchConfiguration(drive_arg)),
+    ]
+
+
 def generate_launch_description():
     vision_config = os.path.join(get_package_share_directory('ugv_vision'), 'config')
     wls_config = os.path.join(vision_config, 'wls_depth.yaml')
@@ -30,11 +47,15 @@ def generate_launch_description():
         DeclareLaunchArgument('avoidance', default_value='false',
                               description='Launch advanced obstacle avoidance; stays IDLE until start service'),
         DeclareLaunchArgument('avoidance_drive', default_value='false', choices=['true', 'false']),
+        DeclareLaunchArgument('curling', default_value='false', choices=['true', 'false'],
+                              description='Launch the FUSED curling controller; stays IDLE until start service'),
+        DeclareLaunchArgument('curling_drive', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('goal_distance', default_value='8.0'),
         DeclareLaunchArgument('target_run', default_value='0', choices=['0','1','2','3','4','5'],
-                              description='Avoidance curling target 1..5; 0 uses goal_distance'),
+                              description='Curling target 1..5; 0 uses goal_distance'),
         DeclareLaunchArgument('lidar_crop', default_value=PythonExpression([
-            "'false' if '", LaunchConfiguration('avoidance'), "'.lower() == 'true' else 'true'"])),
+            "'false' if '", LaunchConfiguration('avoidance'), "'.lower() == 'true' or '",
+            LaunchConfiguration('curling'), "'.lower() == 'true' else 'true'"])),
         DeclareLaunchArgument('base', default_value='true',
                               description='Start motor interface, sensors, LiDAR, and robot transforms'),
         DeclareLaunchArgument('odometry', default_value='wheel_imu', choices=['wheel_imu', 'lidar', 'legacy'],
@@ -75,6 +96,7 @@ def generate_launch_description():
         DeclareLaunchArgument('obstacle_range_source', default_value='depth', choices=['depth', 'lidar'],
                               description='Range source for the obstacle detector; depth uses WLS'),
         DeclareLaunchArgument('obstacle_camera', default_value='oak', choices=['oak', 'usb']),
+        OpaqueFunction(function=select_motion_controller),
         SetEnvironmentVariable('UGV_MODEL', EnvironmentVariable(
             'UGV_MODEL', default_value='ugv_rover')),
         SetEnvironmentVariable('LDLIDAR_MODEL', EnvironmentVariable(
@@ -120,8 +142,11 @@ def generate_launch_description():
                 camera=LaunchConfiguration('obstacle_camera')),
         include('object_detection', 'detection.launch.py', 'objects'),
         include('polar_hist', 'histogram.launch.py', 'polar_hist'),
-        include('obstacle_avoidance_adv', 'avoidance.launch.py', 'avoidance',
+        include('obstacle_avoidance_adv', 'avoidance.launch.py', 'run_avoidance_controller',
                 drive=LaunchConfiguration('avoidance_drive'),
+                goal_distance=LaunchConfiguration('goal_distance')),
+        include('l2s3_curling', 'curling.launch.py', 'run_curling_controller',
+                drive=LaunchConfiguration('run_curling_drive'),
                 target_run=LaunchConfiguration('target_run'),
                 goal_distance=LaunchConfiguration('goal_distance')),
         include('detection_improved', 'detection.launch.py', 'improved_detection',

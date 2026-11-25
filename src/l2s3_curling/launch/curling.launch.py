@@ -1,0 +1,26 @@
+"""Opt-in controller; never starts sensors or motor drivers and never auto-arms."""
+import os
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def generate_launch_description():
+    config = os.path.join(get_package_share_directory('l2s3_curling'),'config','controller.yaml')
+    return LaunchDescription([
+        DeclareLaunchArgument('drive',default_value='false',choices=['true','false']),
+        DeclareLaunchArgument('goal_distance',default_value='8.0'),
+        DeclareLaunchArgument('target_run',default_value='1',choices=['0','1','2','3','4','5'],
+                              description='Curling target 1..5; 0 keeps the forward-distance mission'),
+        DeclareLaunchArgument('params_file',default_value=config),
+        Node(package='l2s3_curling',executable='controller',name='curling_controller',
+             output='screen',parameters=[LaunchConfiguration('params_file'),{
+                 'goal_distance':ParameterValue(LaunchConfiguration('goal_distance'),value_type=float),
+                 'target_run':ParameterValue(LaunchConfiguration('target_run'),value_type=int),
+                 'command_topic':PythonExpression(["'/cmd_vel' if '",LaunchConfiguration('drive'),
+                    "' == 'true' else '/curling_controller/cmd_vel'"]),
+             }]),
+    ])

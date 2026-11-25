@@ -103,7 +103,7 @@ def test_saved_start_bootstraps_without_markers_and_tf_matches_pose(pipeline):
 
 
 def test_marker_correction_changes_tf_and_field_without_rewriting_odometry(pipeline):
-    field, ekf, _client, executor, feed, poses, transforms, _states = pipeline
+    field, ekf, _client, executor, feed, poses, transforms, states = pipeline
     feed()
     feed()
     odom_before = ekf.latest_odom
@@ -122,6 +122,10 @@ def test_marker_correction_changes_tf_and_field_without_rewriting_odometry(pipel
                  math.atan2(2*tf.rotation.w*tf.rotation.z, 1-2*tf.rotation.z**2))
     assert planar_pose(transform, ekf.latest_odom[1]) == pytest.approx(corrected)
     assert poses[-1].pose.pose.position.x == pytest.approx(corrected[0])
+    report = states[-1]
+    assert (report['field_session'], report['field_revision']) == (field.session_id, field.revision)
+    assert report['accepted_marker_stamps_s']
+    assert report['accepted_marker_stamps_s'] == {label: odom_before[0] for label in ekf.last_used}
     # The field consumes the owner's transform instead of publishing another one.
     actual = field.tf_buffer.lookup_transform('map', 'odom', rclpy.time.Time())
     assert actual.transform.translation.x == pytest.approx(tf.translation.x)
@@ -141,6 +145,7 @@ def test_apply_start_service_resets_position_heading_and_rejects_old_images(pipe
     assert future.done() and future.result().success
     spin(executor, lambda: ekf.field_revision > revision, seconds=3)
     assert field.revision > revision
+    assert not ekf.accepted_marker_stamps
     assert ekf.ekf.state == pytest.approx([-3.2, 0., 0.])
     ekf._on_observations(old_observation)
     assert ekf.ekf.state == pytest.approx([-3.2, 0., 0.])

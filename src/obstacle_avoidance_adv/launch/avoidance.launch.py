@@ -13,13 +13,10 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('drive',default_value='false',choices=['true','false']),
         DeclareLaunchArgument('goal_distance',default_value='8.0'),
-        DeclareLaunchArgument('target_run',default_value='0',choices=['0','1','2','3','4','5'],
-                              description='Curling target 1..5; 0 keeps the forward-distance mission'),
         DeclareLaunchArgument('params_file',default_value=config),
         Node(package='obstacle_avoidance_adv',executable='controller',name='obstacle_avoidance_adv',
              output='screen',parameters=[LaunchConfiguration('params_file'),{
                  'goal_distance':ParameterValue(LaunchConfiguration('goal_distance'),value_type=float),
-                 'target_run':ParameterValue(LaunchConfiguration('target_run'),value_type=int),
                  'command_topic':PythonExpression(["'/cmd_vel' if '",LaunchConfiguration('drive'),
                     "' == 'true' else '/obstacle_avoidance_adv/cmd_vel'"]),
              }]),

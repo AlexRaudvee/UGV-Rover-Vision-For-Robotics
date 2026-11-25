@@ -4,7 +4,7 @@ import time
 import numpy as np
 import pytest
 
-from obstacle_avoidance_adv.planner import Controller, Settings
+from l2s3_curling.planner import Controller, Settings
 from test_ekf_navigation import clear_view, navigation_setup
 from test_ekf_observer import observer, field_message, pose_message
 

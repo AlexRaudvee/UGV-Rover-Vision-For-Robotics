@@ -130,7 +130,7 @@ export function controllerStatusVisual(status, ageSeconds) {
     const name = goal.target_name || nav.target_name || '';
     const distance = nav.ready && Number.isFinite(nav.distance_to_goal_m) ? ` · ${nav.distance_to_goal_m.toFixed(2)} m to goal` : '';
     return {state: `${hold ? 'HOLD · ' : waiting ? 'WAIT · ' : ''}${status.state}`,
-        color: status.state === 'FAULT' ? '#ff7272' : hold || waiting || status.state === 'STOP' ? '#ffb454' :
+        color: status.state === 'FAULT' ? '#ff7272' : hold || waiting || ['STOP','RELOCALIZE'].includes(status.state) ? '#ffb454' :
             status.state === 'DONE' ? '#79e5a2' : status.state === 'IDLE' ? '#b9c9d7' : '#f4f8fc',
         summary: `${run ? `Run ${run}` : 'Distance mission'}${name ? ` · ${name}` : ''}${distance}`,
         reason: hold ? status.readiness : waiting ? status.motion_status :
@@ -216,15 +216,17 @@ export class FieldClient {
     constructor(onUpdate = () => {}) {
         this.layout = this.state = this.ranges = this.camera = this.triangulation = this.avoidance = null;
         this.lastState = this.lastRanges = this.lastCamera = this.lastTriangulation = 0;
-        this.lastAvoidance = 0;
+        this.lastAvoidance = this.lastCurling = 0;
+        this.curling = null;
         this.motion = null; this.lastMotion = 0;
         this.listeners = new Set([onUpdate]);
-        this.topics = ['layout', 'state', 'ranges', 'camera', 'triangulation', 'avoidance', 'motion'].map(kind => {
+        this.topics = ['layout', 'state', 'ranges', 'camera', 'triangulation', 'avoidance', 'curling', 'motion'].map(kind => {
             const name = kind === 'ranges' ? '/marker_ranges/result' :
                 kind === 'camera' ? '/marker_pan_tracker/state' :
                 kind === 'triangulation' ? '/marker_triangulation/result' :
                 kind === 'avoidance' ? '/obstacle_avoidance_adv/status' :
-                kind === 'motion' ? '/obstacle_avoidance_adv/visualization' : `/football_field/${kind}`;
+                kind === 'curling' ? '/curling_controller/status' :
+                kind === 'motion' ? '/curling_controller/visualization' : `/football_field/${kind}`;
             const topic = new ROSLIB.Topic({ros: rosbridge.ros, name,
                 messageType: 'std_msgs/msg/String', compression: rosbridge.compression,
                 queue_length: 1});
@@ -236,6 +238,7 @@ export class FieldClient {
                     if (kind === 'camera') this.lastCamera = performance.now();
                     if (kind === 'triangulation') this.lastTriangulation = performance.now();
                     if (kind === 'avoidance') this.lastAvoidance = performance.now();
+                    if (kind === 'curling') this.lastCurling = performance.now();
                     if (kind === 'motion') this.lastMotion = performance.now();
                     for (const listener of this.listeners) listener();
                 } catch (error) { console.warn('Football field message:', error); }
@@ -252,10 +255,12 @@ export class FieldClient {
         const motionAge=(performance.now()-this.lastMotion)/1000;
         if (this.motion && motionAge>=0 && motionAge<=1)
             return controllerStatusVisual(this.motion,motionAge);
+        if (this.curling && (!this.avoidance || this.lastCurling >= this.lastAvoidance))
+            return controllerStatusVisual(this.curling,(performance.now()-this.lastCurling)/1000);
         return controllerStatusVisual(this.avoidance,(performance.now()-this.lastAvoidance)/1000);
     }
     get goalVisual() {
-        return avoidanceGoalVisual(this.avoidance, (performance.now()-this.lastAvoidance)/1000,
+        return avoidanceGoalVisual(this.curling, (performance.now()-this.lastCurling)/1000,
             this.layout?.frame_id);
     }
     get triangulationVisual() {
@@ -285,6 +290,7 @@ export class FieldClient {
         const modes = {
             searching_without_markers: 'sweeping for tags',
             searching_with_one_marker: 'searching for a second tag',
+            relocalizing_toward_last_tag: 'looking toward the last accepted tag',
             manual: 'manual control',
         };
         return `Camera view (estimated) ${this.camera.horizontal_fov_deg.toFixed(0)}° · ` +

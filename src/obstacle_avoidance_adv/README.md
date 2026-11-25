@@ -1,8 +1,7 @@
 # obstacle_avoidance_adv
 
-LiDAR-first controller for the five curling field targets or a straight 5–10 m
-mission, with EKF goal guidance and a fixed obstacle-bypass sequence. Launching
-never starts a mission. Call the start service explicitly.
+LiDAR-first controller for a straight 5–10 m mission and a fixed obstacle-bypass
+sequence. Launching never starts a mission. Call the start service explicitly.
 
 ## Motion
 
@@ -112,25 +111,16 @@ physical braking and slip have not been measured. A short approach need not reac
 - `/detection_improved/obstacle/detections`: optional WLS depth obstacle outlines.
   Delayed measurements are compensated using mission pose history. NaN/missing
   depth, no detections, or unavailable camera TF do not block LiDAR navigation.
-- `/marker_ekf/pose`: required field-frame pose for goal direction, remaining
-  distance and arrival in every active state. Wheel/gyro integration still supplies
-  continuous coordinates for obstacle history and physical bypass distances.
-- `/football_field/state`: required assumed start and alignment revision. The
-  starting heading is zero. With `target_run:=1` through `5`, the map endpoint
-  is the selected assignment coordinate. With `target_run:=0` (the default),
-  it is `(start_x_m + goal_distance, start_y_m)`. Marker corrections never move it.
 
-LiDAR, gyro and forward odometry have a 1.5 s acquisition and receipt timeout.
-The EKF and its last timestamp-matched alignment have a 1 s timeout, and field
-metadata must have been received within 1.5 s. Brief failures hold motion; five seconds of input loss
+Only LiDAR, gyro and forward odometry must be available, with a 1.5 s acquisition
+and receipt timeout. Brief failures hold motion; five seconds of input loss
 latches a fault. Another publisher on the selected command topic also faults.
 A blocked corridor waits for clearance instead of assuming it is free.
 
-There is no cube face/size registration or persistent costmap. Global goal
-guidance uses the external marker EKF; `/static_obstacle_localizer/status` and
-`/obstacle_anchor/pose` are no longer used. Local mission odometry still accumulates
-distance and gyro errors, while accepted marker corrections adjust goal guidance.
-This does not provide drift-free localization or a physical success guarantee.
+There is no cube face/size registration, persistent costmap, or static-landmark
+localizer. `/static_obstacle_localizer/status` and `/obstacle_anchor/pose` are no
+longer used. Mission odometry still accumulates distance and gyro errors: this
+change does not provide drift-free localization or a physical success guarantee.
 The LiDAR plane can miss obstacles above/below it when depth is unavailable.
 
 All settings are in `config/controller.yaml`. The footprint defaults to 0.26 m
@@ -139,143 +129,7 @@ these values. In-place turns check measured obstacles against the circumscribed
 footprint. Missing rear rays do not prove rear clearance; initial turns need space
 around the rover. Reverse movement is used only for the back-up described above (at most 0.30 m).
 
-## EKF goal guidance and comparison
-
-The controller uses `/marker_ekf/pose` for goal guidance and adds `ekf` and
-`navigation` objects to `/obstacle_avoidance_adv/status`. Configure
-`ekf_pose_topic`, `ekf_frame` and `ekf_timeout` in `config/controller.yaml`.
-
-EKF and wheel/gyro poses are aligned at the same acquisition timestamp. This
-alignment translates and rotates the fixed map goal into the continuous motion
-frame. APPROACH/REJOIN steering uses the EKF-corrected distance and bearing.
-`navigation.pose_map` advances the matched EKF pose by subsequent wheel/gyro
-motion; `goal_map_m` remains fixed, while
-`goal_motion_m` changes when localisation corrects. No EKF pose overwrites local
-scan history, committed bypass targets, turn headings or manoeuvre progress.
-
-Arrival uses the published FUSED x/y position directly, without subsequent local
-projection. In every active state, a distance at or below `goal_tolerance_m`
-(default 0.08 m) immediately sends zero velocity and latches DONE. This check
-precedes scan readiness, timestamp matching and all obstacle manoeuvres, including
-back-up. The FUSED pose must still be valid, fresh and use the mission's
-unchanged field reference. Visible markers and a final
-heading are not required: the EKF continues predicting from odometry without tags.
-`navigation.distance_to_goal_m` and the yellow Vizanti line use this raw FUSED
-distance; `projected_distance_to_goal_m` separately reports the steering estimate.
-An INFO completion log records the previous state, FUSED position, goal and
-distance. The status `arrival` object retains this evidence until the next run.
-
-Start rejects missing, malformed or stale EKF data and
-missing/stale field metadata. Motion waits for the first matched sample. If a newer EKF sample
-arrives before its matching wheel callback, the last alignment may be retained
-only until its own acquisition/receipt timeout. An alignment reset or changed
-assumed start holds motion and requires a new mission; it does not move the goal.
-
-The diagnostic reports field-frame position, heading, acquisition/receipt age
-and planar standard deviations. `valid` checks the frame, finite values,
-orientation and covariance structure; `fresh` additionally checks both ages.
-`within_uncertainty_limits` separately checks `max_position_std_m` (default
-0.80 m) and `max_heading_std_deg` (default 30 degrees). Position uncertainty is
-the square root of the largest eigenvalue of the x/y covariance block, so
-correlated diagonal uncertainty is included. Status reports `sigma_position_m`,
-both configured limits, and `uncertainty_reason` when a limit is exceeded.
-
-High uncertainty is an advisory warning in Vizanti. A fresh, valid pose can guide
-motion and qualify for arrival even above either warning threshold. The arrival
-record and completion log include the EKF uncertainty at the stop. The 8 cm
-goal radius applies to the estimated position.
-
-For `ekf.comparison`, the controller captures the assumed start supplied by
-`/football_field/state` when its existing start service is called. A zero starting
-heading is required for this comparison. The EKF pose is translated into that
-start-relative frame and compared with interpolated wheel/gyro history at the
-EKF acquisition time. Position and heading differences are EKF minus wheel/gyro.
-This assumes the physical mission began at the configured start and heading.
-Comparison is withheld while idle, without matching history, after an alignment
-change, or when pose/field metadata is stale. Its `reason` explains why.
-
-Synthetic tests require a sourced ROS environment and run on isolated domain
-109 with a private command topic. They do not start hardware or a driving mission:
-
-```bash
-PYTHONPATH=src/obstacle_avoidance_adv:$PYTHONPATH python3 -m pytest -q \
-  src/obstacle_avoidance_adv/test/test_ekf_observer.py \
-  src/obstacle_avoidance_adv/test/test_ekf_navigation.py \
-  src/obstacle_avoidance_adv/test/test_ekf_uncertainty.py \
-  src/obstacle_avoidance_adv/test/test_fused_arrival.py \
-  src/obstacle_avoidance_adv/test/test_pose_frames.py
-```
-
-These checks validate transport, coordinate/time matching, corrected goal
-steering and arrival, retained bypass progress, and stale/invalid input handling.
-They do not measure real driving accuracy.
-
-## Vizanti controller overlays
-
-The Football Field and 3D views include a prominent controller state panel.
-It shows the selected run, remaining goal distance, current reason, and the
-timestamp-matched LOCAL/EKF position and heading disagreement. Input holds,
-clearance waits, DONE and FAULT are distinguished; stale status is explicit.
-
-The diagnostic geometry comes from `/obstacle_avoidance_adv/visualization` at
-10 Hz, while the verbose `/status` topic remains at 2 Hz:
-
-- **Cyan LOCAL circle and heading arrow:** wheel/gyro pose placed on the field
-  using the frozen assumed start. It appears after mission initialization; EKF
-  corrections never reposition its origin. A dashed cyan line connects it to
-  the contemporaneous corrected pose. The numeric disagreement uses acquisition-
-  matched samples, not the distance between asynchronous browser updates.
-- **Dashed yellow line to the duck:** the direct goal reference and distance,
-  not a collision-free route. It remains visible during bypasses when pose data
-  is fresh.
-- **Orange action:** an arrow for at most two seconds / 0.6 m of the sent drive
-  or reverse command, including curved motion; a rotation arrow for an in-place
-  turn, labelled with remaining angle; or a stop indicator during a hold/wait.
-  Leg distance is calculated for the current state rather than from a stale
-  intermediate target. Action coordinates use the current EKF/local alignment.
-
-Frame/session/revision mismatches and stale data suppress affected geometry.
-The LOCAL pose is not presented before initialization or as live after its
-motion samples expire. These overlays do not change control behaviour.
-
-`/obstacle_avoidance_adv/planned_path` now carries the short drive/reverse command
-preview in **map**, replacing the old rough odom-frame waypoint chain. Turns,
-stops and unavailable geometry publish an empty path. The rotation cue is drawn
-only by the custom field views, since an in-place turn is not a translated path.
-
 ## Start
-
-Select a curling target with `target_run:=1` through `target_run:=5`:
-
-| Run | Target | Field `(x, y)` metres |
-|---|---|---|
-| 1 | Penalty mark | `(3.20, 0.00)` |
-| 2 | Goal area corner right | `(3.90, 1.10)` |
-| 3 | Goal area corner left | `(3.90, -1.10)` |
-| 4 | Penalty area corner right | `(2.85, 2.00)` |
-| 5 | Penalty area corner left | `(2.85, -2.00)` |
-
-The table is shared with `l2s3_curling.path_plan`. The assumed start initializes
-localisation; changing it does not shift a curling target. Selection is read-only
-for each controller process, so restart the controller to change runs. Status
-includes `navigation.target_run`, `target_name` and `goal_map_m` after start.
-
-The Football Field and 3D widgets in Vizanti automatically draw a yellow duck
-at the controller's selected target, with its run/name and field coordinates.
-The ring below the duck marks the exact goal position. The controller's `goal`
-status field supplies the marker, including an idle preview before the start
-service is called; no separate visual planner is required. Missing/stale status
-(over 2.5 s), malformed goals and mismatched field frames hide the marker.
-After source changes, rebuild `obstacle_avoidance_adv` and `vizanti_server`,
-restart the controller, and hard-refresh the browser to load the updated assets.
-
-```bash
-# Private preview output; no motor commands. Still waits for the start service.
-bash start_rover.sh --build avoidance:=true target_run:=1
-```
-
-For the existing distance mission, leave `target_run:=0` and set `goal_distance`.
-The `goal_distance` parameter only determines the endpoint in that mode.
 
 On the host, stop the old launch and build once:
 
@@ -301,8 +155,8 @@ ros2 service call /obstacle_avoidance_adv/stop std_srvs/srv/Trigger '{}'
 ```
 
 Inspect `readiness`, `command_topic`, `front_clearance_m`, `heading_deg`, and
-`route_position_m` in status. `/obstacle_avoidance_adv/planned_path` shows the short
-motion preview in `map`. Readiness does not depend on seeing an obstacle at startup.
+`route_position_m` in status. `/obstacle_avoidance_adv/planned_path` shows current
+intent in `odom`. Readiness does not depend on seeing an obstacle at startup.
 An unobserved passage still cannot be traversed just because start succeeded.
 The driver watchdog stops after 0.5 s without commands; stopping after host/driver
 failure depends on firmware and has not been verified. Initial physical runs need

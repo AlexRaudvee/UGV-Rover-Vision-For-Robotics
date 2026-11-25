@@ -8,7 +8,7 @@ import rclpy
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Trigger
 
-from obstacle_avoidance_adv.node import AvoidanceNode
+from l2s3_curling.node import CurlingControllerNode
 from test_ekf_navigation import clear_view
 from test_ekf_observer import observer, field_message, pose_message
 
@@ -122,6 +122,6 @@ def test_invalid_run_is_rejected_before_publishing_commands(monkeypatch, tmp_pat
     rclpy.init(args=['--ros-args', '-p', f'target_run:={target_run}'], domain_id=109)
     try:
         with pytest.raises(ValueError, match='target_run must be'):
-            AvoidanceNode()
+            CurlingControllerNode()
     finally:
         rclpy.try_shutdown()

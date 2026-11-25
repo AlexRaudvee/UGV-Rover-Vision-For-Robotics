@@ -31,6 +31,11 @@ class PanController:
         self.last_frame = None
         self.mode = 'centering'
         self.tracked_ids = []
+        self.recovery_bearing = None
+
+    def start_relocalization(self, marker_id, now):
+        track = self.tracks.get(marker_id)
+        self.recovery_bearing = (track['angle'] if track and now-track['time'] <= 5. else None)
 
     def observe(self, bearings, now, exposure_pan=None):
         """Bearings are relative to the optical axis; retain robot-relative angles."""
@@ -45,7 +50,7 @@ class PanController:
             elif previous is not None:
                 previous['misses'] += 1
 
-    def step(self, dt, now):
+    def step(self, dt, now, relocalizing=False):
         if not math.isfinite(dt) or dt < 0:
             raise ValueError('dt must be nonnegative and finite')
         self.tracked_ids = [tag for tag in self.ids if tag in self.tracks and
@@ -59,13 +64,18 @@ class PanController:
             error = target-self.pan
             target = self.pan if abs(error) <= self.deadband else self.pan+self.gain*error
             self.mode = 'tracking_markers'
-        elif len(self.tracked_ids) == 1 and self.one_marker == 'search':
+        elif len(self.tracked_ids) == 1 and (self.one_marker == 'search' or relocalizing):
             angle = self.tracks[self.tracked_ids[0]]['angle']
             target = max(-self.limit, min(self.limit, angle + self.search_dir*self.search_reach))
             if abs(target-self.pan) <= 1.:
                 # Reached this side (tag now at the image edge): look the other way.
                 self.search_dir = -self.search_dir
             self.mode = 'searching_with_one_marker'
+        elif not self.tracked_ids and relocalizing and self.recovery_bearing is not None:
+            target = max(-self.limit, min(self.limit, self.recovery_bearing))
+            if abs(target-self.pan) <= 1.:
+                self.recovery_bearing = None
+            self.mode = 'relocalizing_toward_last_tag'
         elif not self.tracked_ids:
             if self.mode != 'searching_without_markers':
                 # Start with the nearer edge so the sweep reverses sooner.

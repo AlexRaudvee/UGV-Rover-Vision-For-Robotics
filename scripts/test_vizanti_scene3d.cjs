@@ -30,11 +30,11 @@ const state = vm.createContext({mocks:{rosbridge:{ros:{},compression:'none'}, se
         get triangulationVisual(){return helpers.triangulationVisual(this.triangulation,(now-1000)/1000,
             this.state && this.state.revision,this.layout && this.layout.frame_id);}
         get localizationStatus(){return this.triangulationVisual ? 'Triangulation: 2 markers' : 'Triangulation stale';}
-        get goalVisual(){return helpers.avoidanceGoalVisual(this.avoidance,(now-1000)/1000,
+        get goalVisual(){return helpers.avoidanceGoalVisual(this.curling,(now-1000)/1000,
             this.layout && this.layout.frame_id);}
         get motionVisual(){return helpers.avoidanceMotionVisual(this.motion,(now-1000)/1000,
             this.layout && this.layout.frame_id,this.state);}
-        get controllerStatus(){return helpers.controllerStatusVisual(this.motion || this.avoidance,(now-1000)/1000);}
+        get controllerStatus(){return helpers.controllerStatusVisual(this.motion || this.curling || this.avoidance,(now-1000)/1000);}
     }},
     document:{getElementById:id=>elements[id]}, performance:{now:()=>now},
     requestAnimationFrame:callback=>{frame=callback;}, atob: v=>Buffer.from(v,'base64').toString('binary'),
@@ -85,7 +85,7 @@ const fillsBeforeFov=groundFills;
 frame();
 assert.equal(groundFills-fillsBeforeFov,3,'camera FOV sector did not render in 3D');
 assert.match(elements['{uniqueID}_markers_status'].textContent,/Camera view \(estimated\)/);
-fieldClient.avoidance={state:'IDLE',goal:{frame_id:'map',position_m:[2.85,2],target_run:4,
+fieldClient.curling={state:'IDLE',goal:{frame_id:'map',position_m:[2.85,2],target_run:4,
     target_name:'Penalty area corner right'}};
 frame();
 assert(labels.includes('RUN 4 · Penalty area corner right (2.85, 2.00)'),
@@ -97,7 +97,7 @@ assert.deepEqual(duckPositions[duckPositions.length-1],duckPosition,
     'field-frame duck was incorrectly transformed through odometry');
 fieldClient.state.transform=[2,-1,Math.PI/2];
 fieldClient.motion={frame_id:'map',session_id:'scene-test',revision:1,state:'PASS',readiness:'Ready',
-    reason:'Passing obstacle',motion_status:'Moving with bounded acceleration',goal:fieldClient.avoidance.goal,
+    reason:'Passing obstacle',motion_status:'Moving with bounded acceleration',goal:fieldClient.curling.goal,
     navigation:{ready:true,distance_to_goal_m:4.2},local_pose:[-2.2,0,0],local_fresh:true,local_age_s:.05,local_timeout_s:1.5,
     fused_pose:[-2.1,.2,.1],fused_age_s:.1,fused_timeout_s:1,distance_to_goal_m:4.2,
     comparison:{distance_m:.22,heading_deg:5.7},

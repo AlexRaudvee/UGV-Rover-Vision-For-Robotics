@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 # Import the coordinate-conversion function that we want to test.
-from obstacle_avoidance_adv.planner import relative_pose
+from l2s3_curling.planner import relative_pose
 
 
 # Run the test once for each row below.

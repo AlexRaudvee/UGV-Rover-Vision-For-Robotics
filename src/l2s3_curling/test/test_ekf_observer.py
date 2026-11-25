@@ -13,7 +13,7 @@ from rclpy.node import Node
 from rclpy.time import Time
 from std_msgs.msg import String
 
-from obstacle_avoidance_adv.node import AvoidanceNode
+from l2s3_curling.node import CurlingControllerNode
 
 
 @pytest.fixture
@@ -27,7 +27,7 @@ def observer(monkeypatch, tmp_path, request):
     for name, value in getattr(request, 'param', {}).items():
         args.extend(['-p', f'{name}:={value}'])
     rclpy.init(args=args, domain_id=109)
-    node = AvoidanceNode()
+    node = CurlingControllerNode()
     yield node
     node.destroy_node()
     rclpy.try_shutdown()
@@ -71,7 +71,7 @@ def test_transport_reports_pose_and_uncertainty_without_publishing_commands(obse
     for item in (node, client):
         executor.add_node(item)
     statuses, commands = [], []
-    client.create_subscription(String, '/obstacle_avoidance_adv/status',
+    client.create_subscription(String, '/curling_controller/status',
                                lambda msg: statuses.append(json.loads(msg.data)), 10)
     client.create_subscription(Twist, '/avoidance_ekf_test/cmd_vel', commands.append, 10)
     publisher = client.create_publisher(PoseWithCovarianceStamped, '/marker_ekf/pose', 1)

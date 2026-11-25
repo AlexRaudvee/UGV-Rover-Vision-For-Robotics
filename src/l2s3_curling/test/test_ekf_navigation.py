@@ -7,7 +7,7 @@ import pytest
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Trigger
 
-from obstacle_avoidance_adv.planner import Controller, Settings, View, ekf_goal_guidance, wrap
+from l2s3_curling.planner import Controller, Settings, View, ekf_goal_guidance, wrap
 from test_ekf_observer import observer, comparison_setup, field_message, pose_message
 
 

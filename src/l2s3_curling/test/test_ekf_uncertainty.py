@@ -6,7 +6,7 @@ import rclpy
 from nav_msgs.msg import Odometry
 from std_srvs.srv import Trigger
 
-from obstacle_avoidance_adv.node import AvoidanceNode
+from l2s3_curling.node import CurlingControllerNode
 from test_ekf_navigation import clear_view, navigation_setup
 from test_ekf_observer import observer, field_message, pose_message
 
@@ -117,6 +117,6 @@ def test_uncertainty_limits_must_be_positive(monkeypatch, tmp_path, name, value)
     rclpy.init(args=['--ros-args', '-p', f'{name}:={value}'], domain_id=109)
     try:
         with pytest.raises(ValueError, match=name+' must be finite and positive'):
-            AvoidanceNode()
+            CurlingControllerNode()
     finally:
         rclpy.try_shutdown()

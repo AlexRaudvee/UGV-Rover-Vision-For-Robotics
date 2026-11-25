@@ -84,6 +84,7 @@ class MarkerEKFNode(Node):
         self.filter_stamp = None
         self.last_update = None          # monotonic time of the last accepted marker
         self.last_used = []
+        self.accepted_marker_stamps = {}
         self.frame_id = 'map'
         self.odom_frame = 'odom'
         self.field_revision = None
@@ -117,6 +118,7 @@ class MarkerEKFNode(Node):
         self.ekf = self._new_filter()
         self.filter_odom = self.filter_stamp = self.last_update = None
         self.last_used = []
+        self.accepted_marker_stamps.clear()
         self.get_logger().info(f'EKF reset: {reason}')
 
     def _on_reset(self, _request, response):
@@ -252,6 +254,7 @@ class MarkerEKFNode(Node):
 
         if not self.ekf.initialised:
             if len(landmarks) >= 2 and self.ekf.initialise_from_markers(landmarks):
+                self.accepted_marker_stamps.update({landmark.label: stamp for landmark in landmarks})
                 self._started(stamp, odom_at_image, f'{len(landmarks)} markers')
                 return
             # Legacy pose-only operation may use a standalone field's initial
@@ -275,6 +278,7 @@ class MarkerEKFNode(Node):
             accepted, _ = self.ekf.update(landmark)
             if accepted:
                 used.append(landmark.label)
+                self.accepted_marker_stamps[landmark.label] = stamp
         if used:
             self.last_update = time.monotonic()
         self.last_used = used
@@ -353,6 +357,9 @@ class MarkerEKFNode(Node):
                       sigma_heading_deg=round(math.degrees(sh), 2), mode=mode,
                       seconds_since_marker=None if age is None else round(age, 2),
                       markers_used_last_image=self.last_used, frame_id=self.frame_id,
+                      accepted_marker_stamps_s=self.accepted_marker_stamps,
+                      pose_stamp_s=stamp_ns / 1e9, field_revision=self.field_revision,
+                      field_session=self.field.get('session_id') if self.field is not None else None,
                       tf_published=self.broadcaster is not None,
                       last_input_error=self.last_input_error)
         self.state_pub.publish(String(data=json.dumps(report)))
