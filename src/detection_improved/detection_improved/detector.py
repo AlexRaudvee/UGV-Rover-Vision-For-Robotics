@@ -34,6 +34,21 @@ from .perception import (
 )
 from .ranging import TemporalRanges
 from .synchronization import select_pair, stamp_ns
+from .navigation import evidence, timing
+
+
+class PublisherGroup:
+    """Publish identical compatibility topics without a second detector process."""
+
+    def __init__(self, publishers):
+        self.publishers = publishers
+
+    def publish(self, message):
+        for publisher in self.publishers:
+            publisher.publish(message)
+
+    def get_subscription_count(self):
+        return sum(p.get_subscription_count() for p in self.publishers)
 
 
 def transform_arrays(transform):
@@ -88,6 +103,12 @@ class MeasuredDetector(Node):
             # projection and to the floor prior (ground check).
             'camera_pitch_down_deg': 0.0,
             'floor_frame': 'base_footprint',   # its z = 0 plane is the floor prior
+            'alias_namespace': '',
+            'navigation_mask_topic': '',
+            'navigation_max_age_s': 1.0,
+            'navigation_max_pair_skew_s': .15,
+            'navigation_sample_step': 4,
+            'navigation_max_points': 4000,
         }
         for name, value in static.items():
             self.declare_parameter(name, value, ParameterDescriptor(read_only=True))
@@ -104,6 +125,11 @@ class MeasuredDetector(Node):
                 and math.isfinite(self.value('camera_pitch_down_deg'))
                 and abs(self.value('camera_pitch_down_deg')) <= 30):
             raise ValueError('Invalid processing rate, image width, transport, or camera pitch')
+        if (not all(math.isfinite(self.value(k)) and self.value(k) > 0 for k in
+                    ('navigation_max_age_s', 'navigation_max_pair_skew_s'))
+                or not 1 <= self.value('navigation_sample_step') <= 32
+                or not 1 <= self.value('navigation_max_points') <= 10_000):
+            raise ValueError('Invalid navigation evidence timing or sample limits')
         self.pitch_fix = pitch_correction(self.value('camera_pitch_down_deg'))
         self.add_on_set_parameters_callback(self.parameter_change)
         self.bridge = CvBridge()
@@ -113,12 +139,27 @@ class MeasuredDetector(Node):
         self.sequence, self.processed = 0, -1
         self.last_good_received = -math.inf
         self.last_header = None
+        self.support_masks = deque(maxlen=20)
         self.range_filter = TemporalRanges(use_ema=(mode == 'depth'))
         self.range_frame = None
         self.details_pub = self.create_publisher(String, 'detections', 1)
         self.debug_pub = self.create_publisher(CompressedImage, 'debug/compressed', 1)
         self.rgb_pub = self.create_publisher(CompressedImage, 'rgb/compressed', 1)
         self.depth_pub = self.create_publisher(CompressedImage, 'depth/compressed', 1)
+        if self.value('alias_namespace'):
+            alias = '/' + self.value('alias_namespace').strip('/')
+            if alias == self.get_namespace():
+                raise ValueError('Alias namespace must differ from detector namespace')
+            for attribute, kind, suffix in (
+                    ('details_pub', String, 'detections'),
+                    ('debug_pub', CompressedImage, 'debug/compressed'),
+                    ('rgb_pub', CompressedImage, 'rgb/compressed'),
+                    ('depth_pub', CompressedImage, 'depth/compressed')):
+                setattr(self, attribute, PublisherGroup([getattr(self, attribute),
+                    self.create_publisher(kind, alias + '/' + suffix, 1)]))
+        if self.value('navigation_mask_topic'):
+            self.create_subscription(CompressedImage, self.value('navigation_mask_topic'),
+                                     self.support_masks.append, 2)
         rgb_type = CompressedImage if self.value('rgb_transport') == 'compressed' else Image
         image_qos = QoSProfile(depth=2, reliability=(ReliabilityPolicy.RELIABLE
                                if self.value('reliable_input') else ReliabilityPolicy.BEST_EFFORT))
@@ -307,6 +348,43 @@ class MeasuredDetector(Node):
                       f'{len(unknown)} unmeasured'
                       + (f'; {len(rejected)} rejected; {floor_note}' if grounded else ''))
             payload = self.payload(rgb.header, True, status)
+            nav = dict(usable=False, reason='Navigation requires depth and a fitted floor')
+            if self.mode == 'depth' and grounded:
+                try:
+                    nav = timing(stamp_ns(rgb)/1e9, stamp_ns(sensor)/1e9,
+                                 self.get_clock().now().nanoseconds/1e9,
+                                 self.value('navigation_max_age_s'),
+                                 self.value('navigation_max_pair_skew_s'))
+                    if nav['usable']:
+                        if heights is None:
+                            raise ValueError('No usable floor context: ' + floor_note)
+                        support = None
+                        if self.value('navigation_mask_topic'):
+                            mask = next((m for m in reversed(self.support_masks)
+                                         if stamp_ns(m) == stamp_ns(sensor)
+                                         and m.header.frame_id == sensor.header.frame_id), None)
+                            if mask is None:
+                                raise ValueError('Waiting for timestamp-matched measured-depth mask')
+                            support = cv2.imdecode(np.frombuffer(bytes(mask.data), np.uint8),
+                                                   cv2.IMREAD_GRAYSCALE)
+                            if support is None:
+                                raise ValueError('Invalid measured-depth mask PNG')
+                            if abs(support.shape[1]*camera.height/camera.width-support.shape[0]) > 1:
+                                raise ValueError('Measured-depth mask aspect ratio differs from depth')
+                            support = cv2.resize(support, (camera.width, camera.height),
+                                                 interpolation=cv2.INTER_NEAREST)
+                        nav.update(evidence(depth, camera.matrix, self.floor_plane, self.pitch_fix,
+                                            support, measured, unknown,
+                                            step=self.value('navigation_sample_step'),
+                                            max_points=self.value('navigation_max_points'),
+                                            minimum=settings.range_min, maximum=settings.range_max))
+                except (ValueError, TypeError, cv2.error) as error:
+                    nav.update(usable=False, reason=str(error))
+            nav.update(schema_version=1,
+                       stamp={'sec': sensor.header.stamp.sec, 'nanosec': sensor.header.stamp.nanosec},
+                       frame_id=sensor.header.frame_id, measured_mask_required=bool(self.value('navigation_mask_topic')),
+                       free_semantics='measured floor patches only; all other cells remain unknown')
+            payload['navigation'] = nav
             payload.update({
                 'field_of_view': list(camera.field_of_view()),
                 # Every object with a measured distance is a detection (an obstacle);

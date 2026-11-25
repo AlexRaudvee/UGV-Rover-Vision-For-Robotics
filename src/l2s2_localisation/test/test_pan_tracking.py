@@ -4,7 +4,7 @@ import pytest
 from l2s2_localisation.pan_tracking import PanController
 
 
-def test_short_dropouts_keep_tracking_but_third_miss_centers():
+def test_short_dropouts_keep_tracking_but_third_miss_searches_around_remaining_tag():
     c = PanController([2, 3], alpha=1)
     c.pan = 20
     c.observe({2: 10, 3: 20}, 0)
@@ -16,8 +16,9 @@ def test_short_dropouts_keep_tracking_but_third_miss_centers():
     assert c.mode == 'tracking_markers'
     c.observe({2: 10}, .3)
     before = c.pan
-    assert c.step(.05, .3) < before
-    assert c.mode == 'centering'
+    assert c.step(.05, .3) > before
+    assert c.mode == 'searching_with_one_marker'
+    assert c.tracked_ids == [2]
 
 
 def test_reappearance_resets_consecutive_misses():
@@ -37,11 +38,12 @@ def test_speed_is_bounded_in_both_directions_and_after_a_timer_stall():
     assert c.step(.05, .15) == pytest.approx(.8)
 
 
-def test_only_one_tag_or_a_dead_detector_returns_to_exact_zero():
+def test_one_tag_searches_and_a_dead_detector_returns_to_exact_zero():
     c = PanController([2, 3])
     c.pan = 2
     c.observe({2: 30}, 0)
-    assert c.step(.1, .1) < 2
+    assert c.step(.1, .1) > 2
+    assert c.mode == 'searching_with_one_marker'
     c.observe({2: 20, 3: 40}, .2)
     c.step(.05, .2)
     assert c.mode == 'tracking_markers'
@@ -123,7 +125,7 @@ def test_losing_one_of_three_does_not_center_while_two_others_remain():
         c.observe({5: 30}, frame*.1)
         c.step(.05, frame*.1)
     assert c.tracked_ids == [5]
-    assert c.mode == 'centering'
+    assert c.mode == 'searching_with_one_marker'
 
 
 def test_tag_handover_and_time_expiry_apply_independently():

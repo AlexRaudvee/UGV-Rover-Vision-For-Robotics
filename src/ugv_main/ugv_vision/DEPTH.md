@@ -1,6 +1,6 @@
 # Shared WLS depth
 
-Both improved dashboard detectors and the Vizanti 3D view now consume the same
+The shared improved dashboard detector and the Vizanti 3D view consume the same
 metric WLS depth used to produce `/wls_filtered/depth_preview/compressed`.
 The topic spelling is `wls_filtered` (WLS = weighted least squares).
 
@@ -10,10 +10,10 @@ OAK metric depth + RGB guide + CameraInfo
                   WLS filter
                      |
    /wls_filtered/compressedDepth + /wls_filtered/camera_info
-          |                   |                    |
-    object detector     obstacle detector      depth_cloud -> 3D
+          |                                        |
+    one improved detector                     depth_cloud -> 3D
           |
-   (the preview also renders this same metric depth)
+    object + obstacle compatibility topics
 ```
 
 The preview is a JPEG colour image, not a metric depth image. Consumers use
@@ -21,6 +21,14 @@ The preview is a JPEG colour image, not a metric depth image. Consumers use
 16-bit PNG. `/wls_filtered` is the equivalent raw `16UC1` image. The WLS node
 publishes `/wls_filtered/camera_info` with intrinsics scaled to its actual output
 resolution. Optical frame and original depth capture timestamp are preserved.
+
+`/wls_filtered/measurement_mask/compressed` is a mono8 PNG carrying the same
+depth acquisition header. White pixels have a valid source measurement and a
+filtered value within `measurement_tolerance_m` (default 0.05 m) of it. Filled
+holes and significantly lagging EMA values are black. The Session 3 map requires
+this exact-timestamp support before treating floor patches as observed free.
+The support is relative to OAK's published input depth, which may itself have
+on-device filtering; it is not a claim about raw stereo correspondence quality.
 
 ## Shared temporal smoothing
 
@@ -60,7 +68,7 @@ the detector configuration are separate and can add further smoothing.
 | Same file | `max_image_age` | Maximum accepted camera/filter delay. Placement still uses capture-time TF. |
 | `config/oak_d_lite.yaml`, `stereo` section | `i_enable_*_filter`, threshold ranges, spatial/temporal parameters | Depth processing on the OAK camera, before WLS. Threshold ranges are millimetres. |
 | `../../detection_improved/config/depth.yaml` | `range_min/max`, floor/size/temporal settings | Shared depth detector settings. |
-| `../../detection_improved/config/lidar.yaml` | Width/range overrides for the obstacle branch | Loaded after the shared depth configuration even when that branch uses WLS. The filename is retained for compatibility. |
+| `../../detection_improved/config/lidar.yaml` | Width/range overrides for an independent obstacle branch | Used in LiDAR mode or with `single_depth:=false`; the default shared depth node uses `depth.yaml` only. |
 
 `fill_holes: true` interpolates depth in unsupported pixels. Set it to `false` to
 preserve missing measurements. Preview colour limits never recalibrate or rescale
@@ -88,10 +96,11 @@ Inside the sourced ROS container (`ROS_DOMAIN_ID=4`), verify:
 
 ```bash
 ros2 param get /detection_improved/object/detector depth_topic
-ros2 param get /detection_improved/obstacle/detector depth_topic
 ros2 param get /depth_cloud depth_topic
 ros2 topic hz /wls_filtered/compressedDepth
 ros2 topic hz /vizanti/depth/points
 ```
 
-All three `depth_topic` values should be `/wls_filtered/compressedDepth`.
+Both `depth_topic` values should be `/wls_filtered/compressedDepth`.
+The default launch has one detector node; `/detection_improved/obstacle/*` is its
+compatibility output, so there is no second obstacle detector node to query.

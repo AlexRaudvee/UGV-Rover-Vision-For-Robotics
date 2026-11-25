@@ -50,6 +50,12 @@ def smooth_depth(depth, guide, strength=8000.0, sigma_color=1.5, fill_holes=Fals
     return result
 
 
+def measurement_support(depth, filtered, tolerance=.05):
+    """Exclude interpolated holes and strongly altered/lagging filtered values."""
+    return (np.isfinite(depth) & (depth > 0) & np.isfinite(filtered) & (filtered > 0)
+            & (np.abs(filtered-depth) <= tolerance)).astype(np.uint8)*255
+
+
 class DepthEMA:
     """Per-pixel metric EMA using capture-time intervals, with no stale hole filling."""
 
@@ -88,6 +94,7 @@ class WLSDepth(Node):
             'lambda': 16000.0, 'sigma_color': 1.5, 'fill_holes': True,
             'near_m': 0.1, 'far_m': 15.0,
             'ema_tau_s': 0.35, 'ema_max_delta_m': 0.5,
+            'measurement_tolerance_m': .05,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value, ParameterDescriptor(read_only=True))
@@ -97,7 +104,7 @@ class WLSDepth(Node):
                 and self.value('sigma_color') > 0
                 and 0 <= self.value('near_m') < self.value('far_m')
                 and all(math.isfinite(self.value(name)) and self.value(name) >= 0
-                        for name in ('ema_tau_s', 'ema_max_delta_m'))):
+                        for name in ('ema_tau_s', 'ema_max_delta_m', 'measurement_tolerance_m'))):
             raise ValueError('Invalid WLS parameters')
         if not hasattr(cv2, 'ximgproc'):
             raise RuntimeError('WLS requires OpenCV contrib (python3-opencv on Ubuntu)')
@@ -122,6 +129,8 @@ class WLSDepth(Node):
             CompressedImage, '/wls_filtered/compressedDepth', 1)
         self.preview_pub = self.create_publisher(
             CompressedImage, '/wls_filtered/compressed', 1)
+        self.support_pub = self.create_publisher(
+            CompressedImage, '/wls_filtered/measurement_mask/compressed', 1)
         self.timer = self.create_timer(1.0 / self.value('rate_hz'), self.tick)
         self.get_logger().info('WLS ready: registered OAK depth + RGB -> /wls_filtered')
 
@@ -166,6 +175,15 @@ class WLSDepth(Node):
             stamp = self.depth.header.stamp
             key = (self.depth.header.frame_id, None if info is None else tuple(info.p))
             filtered = self.temporal.update(filtered, stamp.sec + stamp.nanosec / 1e9, key)
+            support = measurement_support(depth, filtered, self.value('measurement_tolerance_m'))
+            ok, support_png = cv2.imencode('.png', support)
+            if not ok:
+                raise ValueError('Cannot encode measured-depth support mask')
+            mask_message = CompressedImage()
+            mask_message.header = self.depth.header
+            mask_message.format = 'mono8; png compressed mono8'
+            mask_message.data = support_png.tobytes()
+            self.support_pub.publish(mask_message)
             millimeters = np.clip(np.rint(filtered * 1000), 0, 65535).astype(np.uint16)
             raw = self.bridge.cv2_to_imgmsg(millimeters, encoding='16UC1')
             raw.header = self.depth.header

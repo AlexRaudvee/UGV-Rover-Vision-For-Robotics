@@ -66,5 +66,8 @@ docker exec "${exec_options[@]}" \
             "field_config:=$1/src/ugv_main/ugv_bringup/param/football_field.yaml" \
             "marker_range_config:=$1/src/l2s2_localisation/config/marker_ranges.yaml" \
             "triangulation_config:=$1/src/l2s2_localisation/config/triangulation.yaml" \
-            "pan_tracking_config:=$1/src/l2s2_localisation/config/pan_tracking.yaml" "${@:3}"
+            "pan_tracking_config:=$1/src/l2s2_localisation/config/pan_tracking.yaml" \
+            "obstacle_map_config:=$1/src/l2s3_curling/config/obstacle_map_preview.yaml" \
+            "obstacle_marker_map:=$1/src/l2s2_localisation/config/marker_map.yaml" \
+            "obstacle_footprint_config:=$1/src/obstacle_avoidance_adv/config/controller.yaml" "${@:3}"
     ' rover-session "$container_workspace" "$build_mode" "$@"

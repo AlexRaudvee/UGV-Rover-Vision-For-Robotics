@@ -4,7 +4,7 @@ wls_filter:
     rgb_topic: /oak/rgb/image_rect/compressed
     camera_info_topic: /oak/stereo/camera_info
     rate_hz: 10.0
-    max_width: 640
+    max_width: 320
     stale_after_s: 0.8       # Time since receipt, not camera capture delay.
     lambda: 16000.0         # Smoothing strength.
     sigma_color: 1.5        # RGB edge sensitivity.

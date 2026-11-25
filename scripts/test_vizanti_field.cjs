@@ -64,6 +64,13 @@ assert.equal(mocks.triangulationVisual({...fix,fresh:false},0,2,'map'),null,'rej
 assert(drawn.some(d=>d[0]==='moveTo' && Math.abs(d[1]-342)<1e-9 && d[2]===400),'camera FOV origin is wrong');
 assert.match(elements['{uniqueID}_markers_status'].textContent,/Camera view \(estimated\) 90°/);
 assert.match(elements['{uniqueID}_markers_status'].textContent,/tracking 3 tags/);
+listeners['/marker_pan_tracker/state']({data:JSON.stringify({...camera,
+    mode:'searching_with_one_marker',tracked_ids:[2]})});
+assert.match(vm.runInContext('field.cameraStatus',state),/searching around tag 2/);
+assert(!vm.runInContext('field.cameraStatus',state).includes('centering forward'));
+listeners['/marker_pan_tracker/state']({data:JSON.stringify({...camera,mode:'manual'})});
+assert.match(vm.runInContext('field.cameraStatus',state),/manual control/);
+listeners['/marker_pan_tracker/state']({data:JSON.stringify(camera)});
 const wedge=mocks.cameraFov(camera,{...fieldState,robot:[1,2,Math.PI/2]},0);
 assert.equal(wedge.length,27);
 assert(Math.abs(wedge[13][0]+3)<1e-12 && Math.abs(wedge[13][1]-2.04)<1e-12,

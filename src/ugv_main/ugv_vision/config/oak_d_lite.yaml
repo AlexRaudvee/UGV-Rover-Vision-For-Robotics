@@ -6,11 +6,11 @@
       i_nn_type: none
       i_restart_on_diagnostics_error: true
     rgb:
-      i_fps: 20.0
+      i_fps: 10.0
     left:
-      i_fps: 20.0
+      i_fps: 10.0
     right:
-      i_fps: 20.0
+      i_fps: 10.0
     stereo:
       i_subpixel: true
       i_align_depth: true

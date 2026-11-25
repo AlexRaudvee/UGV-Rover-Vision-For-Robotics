@@ -5,7 +5,8 @@
     image_topic: /image_rect
     # baseline | clahe | sharpen | upscale | tuned | undistort | improved
     # Change while running: ros2 param set /marker_detector preset baseline
-    preset: improved
+    # Single pass at the original resolution for live localization.
+    preset: sharpen
     # Lab markers use the native AprilTag tagStandard41h12 family.
     # OpenCV dictionary families remain supported as additional entries.
     # Keep only the families used in the lab: each one is an extra detector pass.

@@ -2,7 +2,13 @@
 
 import numpy as np
 
-from ugv_vision.wls_depth import smooth_depth
+from ugv_vision.wls_depth import measurement_support, smooth_depth
+
+
+def test_measurement_support_excludes_filled_holes_and_large_temporal_changes():
+    raw = np.array([[2., np.nan, 0., 2.]], np.float32)
+    filtered = np.array([[2.02, 2., 2., 2.3]], np.float32)
+    assert measurement_support(raw, filtered).tolist() == [[255, 0, 0, 0]]
 
 
 def test_constant_depth_keeps_metric_scale_and_missing_pixels():
@@ -52,8 +58,8 @@ def test_wls_calibration_metric_preview_and_cloud_share_depth(monkeypatch):
     monkeypatch.setenv('ROS_DOMAIN_ID', '88')
     rclpy.init(args=['--ros-args', '-p', 'max_width:=160'])
     wls, cloud = WLSDepth(), DepthCloud()
-    messages = {key: [] for key in ('raw', 'metric', 'info', 'preview', 'cloud')}
-    for key in ('raw', 'metric', 'info', 'preview'):
+    messages = {key: [] for key in ('raw', 'metric', 'info', 'preview', 'support', 'cloud')}
+    for key in ('raw', 'metric', 'info', 'preview', 'support'):
         setattr(wls, key + '_pub', SimpleNamespace(publish=messages[key].append))
     cloud.publisher = SimpleNamespace(publish=messages['cloud'].append)
     try:
@@ -78,6 +84,9 @@ def test_wls_calibration_metric_preview_and_cloud_share_depth(monkeypatch):
         np.testing.assert_allclose(filtered, 2.5, atol=.001)
         assert messages['info'][0].p[0] == 100.
         assert messages['metric'][0].header == messages['preview'][0].header
+        assert messages['support'][0].header == raw.header
+        mask = cv2.imdecode(np.frombuffer(messages['support'][0].data, np.uint8), cv2.IMREAD_GRAYSCALE)
+        assert mask.shape == filtered.shape and (mask == 255).all()
         tf = TransformStamped()
         tf.header.frame_id, tf.child_frame_id = 'odom', 'camera'
         tf.transform.rotation.w = 1.
@@ -100,6 +109,8 @@ def test_wls_calibration_metric_preview_and_cloud_share_depth(monkeypatch):
         metric_depth = depth_in_meters(messages['metric'][-1])
         np.testing.assert_allclose(raw_depth, expected, atol=.0006)
         np.testing.assert_array_equal(raw_depth, metric_depth)
+        mask = cv2.imdecode(np.frombuffer(messages['support'][-1].data, np.uint8), cv2.IMREAD_GRAYSCALE)
+        assert not mask.any(), 'lagging EMA values must not certify measured free floor'
         assert messages['metric'][-1].header == messages['preview'][-1].header
         cloud.on_info(messages['info'][-1])
         cloud.on_image(messages['metric'][-1])

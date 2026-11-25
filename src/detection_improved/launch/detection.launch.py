@@ -18,12 +18,16 @@ def config(name):
 def launch_nodes(context):
     camera = LaunchConfiguration('camera').perform(context)
     depth_obstacles = LaunchConfiguration('obstacle_range_source').perform(context) == 'depth'
+    shared = (depth_obstacles and LaunchConfiguration('single_depth').perform(context).lower() == 'true'
+              and LaunchConfiguration('depth').perform(context).lower() == 'true'
+              and LaunchConfiguration('lidar').perform(context).lower() == 'true')
     sim_time = {'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'),
                                                value_type=bool)}
-    return [
+    nodes = [
         Node(package='detection_improved', executable='depth_detector', name='detector',
              namespace='detection_improved/object', output='screen',
-             parameters=[config('depth.yaml'), sim_time],
+             parameters=[config('depth.yaml'), sim_time,
+                         {'alias_namespace': 'detection_improved/obstacle' if shared else ''}],
              condition=IfCondition(LaunchConfiguration('depth')),
              respawn=True, respawn_delay=3.0),
         Node(package='detection_improved',
@@ -38,11 +42,16 @@ def launch_nodes(context):
              parameters=[config('histogram.yaml'), sim_time],
              condition=IfCondition(LaunchConfiguration('histogram'))),
     ]
+    if shared:
+        del nodes[1]
+    return nodes
 
 
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('depth', default_value='true'),
+        DeclareLaunchArgument('single_depth', default_value='true',
+                              description='Share one depth detector between object/obstacle compatibility topics'),
         DeclareLaunchArgument('lidar', default_value='true',
                               description='Start obstacle branch using the selected range source'),
         DeclareLaunchArgument('histogram', default_value='true'),

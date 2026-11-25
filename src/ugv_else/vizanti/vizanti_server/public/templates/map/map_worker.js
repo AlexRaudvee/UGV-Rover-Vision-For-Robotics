@@ -53,7 +53,9 @@ self.addEventListener('message', function(event) {
         for (let i = 0; i < data.length; i++) {
             let occupancyValue = data[i];
             let color = [255, 255, 255, 255]; // White for clear
-            if (occupancyValue >= 0 && occupancyValue <= 100) {
+            if (event.data.obstacle_overlay && occupancyValue <= 0) {
+                color = [0, 0, 0, 0]; // Free and unknown reveal the field below.
+            } else if (occupancyValue >= 0 && occupancyValue <= 100) {
                 let v = 255 - (255 * occupancyValue) / 100;
                 color = [v, v, v, 255];
             } else if (occupancyValue < 0) {

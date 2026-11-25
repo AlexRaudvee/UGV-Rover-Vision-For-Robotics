@@ -110,6 +110,9 @@ export class FieldClient {
         return `Camera view (estimated) ${this.camera.horizontal_fov_deg.toFixed(0)}° · ` +
             (['tracking_markers', 'tracking_pair'].includes(this.camera.mode) ?
                 (Array.isArray(this.camera.tracked_ids) ? `tracking ${this.camera.tracked_ids.length} tags` : 'tracking tags') :
+                this.camera.mode === 'searching_with_one_marker' ?
+                    `searching around tag ${this.camera.tracked_ids?.length ? this.camera.tracked_ids[0] : ''}`.trim() :
+                this.camera.mode === 'manual' ? 'manual control' :
                 'centering forward');
     }
     get markerVisuals() {

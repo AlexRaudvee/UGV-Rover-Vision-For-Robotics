@@ -47,8 +47,9 @@ def detection(node, ids=(2, 3), stamp=None, offset=0):
     corners = np.array([[-2, -2], [2, -2], [2, 2], [-2, 2]])
     data = dict(stamp=node.get_clock().now().nanoseconds/1e9 if stamp is None else stamp,
                 width=640, height=480, image_geometry='rectified', detections=[])
+    matrix = camera.matrix_for(data['width'], data['height'])
     for marker, bearing in zip(ids, np.linspace(20+offset, 40+offset, len(ids))):
-        center = [camera.K[0, 2]-camera.K[0, 0]*math.tan(math.radians(bearing)), 240]
+        center = [matrix[0, 2]-matrix[0, 0]*math.tan(math.radians(bearing)), matrix[1, 2]]
         data['detections'].append(dict(id=marker, family='APRILTAG_standard41h12',
                                        corners=(corners+center).tolist(), hamming=1, decision_margin=80))
     return String(data=json.dumps(data))
@@ -71,7 +72,27 @@ def test_camera_calibration_exposure_angles_duplicate_and_stale_frames(tracker):
         node.on_detections(detection(node, ids=(2,)))
     assert node.control.tracks[3]['misses'] == 3
     node.control.step(.05, time.monotonic())
-    assert node.control.mode == 'centering'
+    assert node.control.mode == 'searching_with_one_marker'
+
+
+def test_one_tag_searches_by_default_and_resumes_after_manual_override(tracker):
+    node = tracker
+    node.on_head(head(node, 10))
+    node.on_detections(detection(node, ids=(2,)))
+    node.last_tick = time.monotonic()-.05
+    node.tick()
+    assert node.control.mode == 'searching_with_one_marker'
+    assert node.control.tracked_ids == [2]
+    assert node.control.pan > 10
+    node.on_manual(head(node, -20))
+    node.tick()
+    assert node.control.mode == 'manual'
+    assert node.control.pan == pytest.approx(-20)
+    node.manual = (time.monotonic()-node.p['manual_hold_s']-1, -20., 0.)
+    node.last_tick = time.monotonic()-.05
+    node.tick()
+    assert node.control.mode == 'searching_with_one_marker'
+    assert node.control.pan > -20
 
 
 def test_tracker_commands_driver_priority_fov_and_expiry(tracker):

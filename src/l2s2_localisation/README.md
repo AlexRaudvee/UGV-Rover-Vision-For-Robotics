@@ -50,7 +50,7 @@ terminals. On the host, build/start with:
 
 ```bash
 cd ~/ugv_ws
-bash start_rover.sh --build marker_preset:=improved
+bash start_rover.sh --build
 ```
 
 The EKF now belongs to this launch. Restart only the Session 3 planner in a second
@@ -213,8 +213,11 @@ advances at most 8 degrees/second at 20 Hz. Tilt stays at the configured angle.
 A target survives two consecutive missing frames and is discarded on the third.
 Reappearance resets its counter. Tracking continues while at least two targets
 are retained. Losing one of three or more does not force a return to zero.
-With fewer than two, the camera smoothly returns to pan 0, even if one
-tag remains visible. The configurable observation timeout also handles a stopped
+With exactly one retained tag, the camera always searches up to 36 degrees to
+either side of its estimated bearing to find a second tag. The former
+`one_marker: center` option has been removed. Search respects the same pan and
+speed limits; a retained tag may still be lost through motion or occlusion.
+With no retained tags, the camera smoothly returns to pan 0. The configurable observation timeout also handles a stopped
 detector. Stale/duplicate frames do not refresh tracks, and decoder quality
 checks reject weak IDs. All tags cannot stay visible when they are farther
 apart than the camera's view or outside its pan limits.
@@ -231,12 +234,29 @@ Edit **`config/pan_tracking.yaml`** and restart localization:
 | `smoothing_alpha` | `0.25` | Smaller values smooth more, with more delay |
 | `gain` | `0.7` | Fraction of filtered error used for each target |
 | `max_pan_deg` | `120.0` | Limit either side of forward |
+| `search_reach_deg` | `36.0` | Search extent on either side of the remaining tag's bearing |
 | `tilt_deg` | `0.0` | Fixed tilt; positive looks up |
 | `horizontal_fov_deg` | `0.0` | Zero uses calibration; positive overrides it |
 | `fov_range_m` | `4.0` | Sector drawing length, not a detection range limit |
 
 `start_rover.sh` supplies this source YAML, so later parameter edits need a
 restart but no build. Range sizes and marker map settings still reload live.
+The removal of the one-tag centre mode changes Python code: rebuild
+`l2s2_localisation` and `vizanti_server` once, then restart the tracker and
+hard-refresh Vizanti. An existing rover/EKF session can remain running. In a
+sourced container terminal at the workspace root:
+
+```bash
+colcon build --packages-select l2s2_localisation vizanti_server --executor sequential
+source install/setup.bash
+pkill -INT -f '[/]l2s2_localisation/pan_tracker'
+ros2 run l2s2_localisation pan_tracker --ros-args -r __node:=marker_pan_tracker \
+  --params-file /home/ws/ugv_ws/src/l2s2_localisation/config/pan_tracking.yaml
+```
+
+The daily launch does not respawn this tracker, so the replacement stays in this
+terminal until Ctrl+C. A later full rover restart will start it automatically.
+
 The initial deployment requires rebuilding `l2s2_localisation`, `ugv_bringup`,
 `ugv_description`, and `vizanti_server`; `bash start_rover.sh --build` includes
 all four. To run a full session with ranging but no tracking:
@@ -272,8 +292,9 @@ ros2 topic echo /ugv/pan_tilt_commanded --once
 ```
 
 Tracker state includes `tracked_ids` (including tags briefly retained through
-dropouts) and `mode: tracking_markers` or `centering`. Vizanti displays the number
-of retained tags while tracking. Extend `target_ids` when adding another field
+dropouts) and `mode: tracking_markers`, `searching_with_one_marker`, `manual` or
+`centering` (no retained tags). Vizanti displays the number of retained tags while
+tracking and identifies one-tag search. Extend `target_ids` when adding another field
 marker; its known coordinates remain configured separately in `marker_map.yaml`.
 
 ## Live triangulation beside odometry

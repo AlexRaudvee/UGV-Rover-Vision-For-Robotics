@@ -238,6 +238,8 @@ async function drawMap(){
 //Topic
 
 function connect(){
+	// Obstacle previews overlay the football field; ordinary maps remain backgrounds.
+	canvas.style.zIndex = (topic === '/obstacle_map/grid' || topic === '/obstacle_map/inflated' || topic === '/obstacle_map/detected') ? '1' : '-5';
 
 	if(topic == ""){
 		status.setError("Empty topic.");
@@ -309,6 +311,7 @@ function queueWorkerMsg(msg){
 	worker_thread.postMessage({
 		map_msg: msg,
 		colour_scheme: colourSchemeBox.value,
+		obstacle_overlay: topic === '/obstacle_map/grid' || topic === '/obstacle_map/inflated' || topic === '/obstacle_map/detected',
 	});
 }
 

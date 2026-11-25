@@ -9,6 +9,7 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 import os
 
 
@@ -39,7 +40,7 @@ def generate_launch_description():
                               description='Select LiDAR/wheel/IMU fusion or original odometry'),
         DeclareLaunchArgument('markers', default_value='true',
                               description='Run marker detection on the USB camera stream'),
-        DeclareLaunchArgument('marker_preset', default_value='baseline'),
+        DeclareLaunchArgument('marker_preset', default_value='sharpen'),
         DeclareLaunchArgument('marker_ranges', default_value='true',
                               description='Measure AprilTag distances and display them on the field'),
         DeclareLaunchArgument('marker_ekf', default_value='true',
@@ -70,6 +71,20 @@ def generate_launch_description():
         DeclareLaunchArgument('polar_hist', default_value='false'),
         DeclareLaunchArgument('improved_detection', default_value='true',
                               description='Run improved depth/LiDAR detection and histograms'),
+        DeclareLaunchArgument('obstacle_map', default_value='true',
+                              description='Preview field obstacles from improved depth only; never drives'),
+        DeclareLaunchArgument('path_planner', default_value='true',
+                              description='Show the Session 3 straight-line path; never drives'),
+        DeclareLaunchArgument('path_follower', default_value='true',
+                              description='Start the slow path follower disarmed'),
+        DeclareLaunchArgument('target_run', default_value='1', choices=['1', '2', '3', '4', '5'],
+                              description='Session 3 target number'),
+        DeclareLaunchArgument('obstacle_map_config', default_value=os.path.join(
+            get_package_share_directory('l2s3_curling'), 'config', 'obstacle_map_preview.yaml')),
+        DeclareLaunchArgument('obstacle_marker_map', default_value=os.path.join(
+            get_package_share_directory('l2s2_localisation'), 'config', 'marker_map.yaml')),
+        DeclareLaunchArgument('obstacle_footprint_config', default_value=os.path.join(
+            get_package_share_directory('obstacle_avoidance_adv'), 'config', 'controller.yaml')),
         DeclareLaunchArgument('obstacle_range_source', default_value='depth', choices=['depth', 'lidar'],
                               description='Range source for the obstacle detector; depth uses WLS'),
         DeclareLaunchArgument('obstacle_camera', default_value='oak', choices=['oak', 'usb']),
@@ -124,4 +139,14 @@ def generate_launch_description():
         include('detection_improved', 'detection.launch.py', 'improved_detection',
                 camera=LaunchConfiguration('obstacle_camera'),
                 obstacle_range_source=LaunchConfiguration('obstacle_range_source')),
+        include('l2s3_curling', 'obstacle_map.launch.py', 'obstacle_map',
+                config_file=LaunchConfiguration('obstacle_map_config'),
+                marker_map_file=LaunchConfiguration('obstacle_marker_map'),
+                footprint_file=LaunchConfiguration('obstacle_footprint_config')),
+        Node(package='l2s3_curling', executable='path_planner', name='path_planner',
+             condition=IfCondition(LaunchConfiguration('path_planner')),
+             parameters=[{'target_run': ParameterValue(LaunchConfiguration('target_run'), value_type=int)}],
+             output='screen'),
+        Node(package='l2s3_curling', executable='path_follower', name='path_follower',
+             condition=IfCondition(LaunchConfiguration('path_follower')), output='screen'),
     ])

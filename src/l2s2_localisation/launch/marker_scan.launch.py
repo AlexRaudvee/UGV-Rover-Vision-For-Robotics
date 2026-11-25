@@ -15,7 +15,7 @@ def generate_launch_description():
     config = lambda name: os.path.join(share, 'config', name)  # noqa: E731
     return LaunchDescription([
         DeclareLaunchArgument('image_topic', default_value='/image_raw'),
-        DeclareLaunchArgument('preset', default_value='improved'),
+        DeclareLaunchArgument('preset', default_value='sharpen'),
         DeclareLaunchArgument('marker_size_m', default_value='0.0'),
         Node(package='l2s1_marker_detection', executable='detector', name='marker_detector',
              output='screen',

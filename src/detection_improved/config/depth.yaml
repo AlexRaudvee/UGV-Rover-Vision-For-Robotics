@@ -45,6 +45,11 @@
     # Ground check (depth only): one pass at half resolution over the depth image;
     # keep only objects standing on the floor fitted to it. See grounded.py.
     ground_check: true
+    # Navigation requires raw measurement support even when WLS fills holes.
+    navigation_mask_topic: /wls_filtered/measurement_mask/compressed
+    # Temporary preview experiment: tolerate delayed/misaligned frames.
+    navigation_max_age_s: 4.0
+    navigation_max_pair_skew_s: 3.0
     floor_refit_frames: 3       # refit the floor every 3rd frame, reuse it in between
     floor_min_inliers: 1000     # of ~14k sampled points; drive_1 floor gives ~1-3k
     seed_min_pixels: 40

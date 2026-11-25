@@ -17,6 +17,8 @@ bash start_rover.sh --build
 ```
 
 The daily launch now also starts the marker EKF, which owns `map -> odom`.
+Marker detection defaults to `sharpen`, a single pass on the rectified image;
+`marker_preset:=improved` explicitly enables the more expensive two-pass preset.
 Stop an old standalone marker EKF before restarting; do not start another one.
 The field rover is labelled **FUSED**. **Apply saved start here** resets the EKF
 and field alignment together. See the
@@ -24,8 +26,14 @@ and field alignment together. See the
 
 This starts the existing container if necessary, builds the project packages,
 and launches the motor interface, sensor feedback, odometry, IMU filter, LD19,
-robot transforms, USB and OAK cameras, Vizanti, the improved depth/LiDAR
-detectors, and their histograms together. The original detection stack is disabled.
+robot transforms, USB and OAK cameras, Vizanti, one improved WLS-depth detector,
+its compatibility display topics and histograms, and the Session 3 obstacle-map
+preview together. The original detection stack is disabled.
+The Session 3 path planner also starts automatically, targeting run 1 by default;
+choose another with `target_run:=2` through `target_run:=5`, or disable it with
+`path_planner:=false`.
+The slow path follower starts disarmed and needs an explicit `/path_follower/start`
+service call; `path_follower:=false` leaves it out of the launch.
 Leave this terminal open. Ctrl+C stops this foreground ROS session; the container
 remains running. This does not install a service that launches ROS at boot or on
 every `docker start`.
@@ -77,6 +85,15 @@ mission route, stops before an obstacle, makes two gyro-controlled 90 degree
 turns around a sidestep, passes 1 m, then drives diagonally to the original goal.
 `avoidance:=true` starts it in IDLE with
 private preview commands; `avoidance_drive:=true` explicitly selects motor output.
+
+The Session 3 map uses improved depth detection only, configured marker-stand
+footprints and EKF transforms. Add Vizanti **Map** `/obstacle_map/grid` (or
+`/obstacle_map/inflated`) and **Marker Array** `/obstacle_map/markers`, fixed frame
+`map`. Missing observations stay unknown; the stand defaults are explicitly
+provisional 30 × 30 cm. The A* preview uses the inflated map but allows unknown
+space, and it does not drive.
+See the [map guide](src/l2s3_curling/README.md#obstacle-map-preview) for configuration,
+readiness and limitations. `obstacle_map:=false` disables the preview.
 
 On later runs without source changes:
 
@@ -130,7 +147,7 @@ ros2 node list
 ros2 topic hz /detection_improved/polar_hist/obstacle/histogram/compressed
 ```
 
-`ros2 pkg executables` confirms installation; `/detection_improved/obstacle/detector` in
+`ros2 pkg executables` confirms installation; `/detection_improved/object/detector` in
 the node list confirms it is running. Histogram messages confirm output, but
 can also report stale/missing camera input. Inspect
 `ros2 topic echo /detection_improved/obstacle/detections --once` and the debug image to
@@ -138,9 +155,9 @@ check the input's freshness. Add Compressed Image widgets in Vizanti for
 `/detection_improved/obstacle/debug/compressed` and
 `/detection_improved/polar_hist/obstacle/histogram/compressed`.
 
-`detection_improved` measures objects using registered OAK depth and projected
-LiDAR ranges, with floor checks for depth and merged object pieces. Its histogram
-node plots each detector and marks measured openings of at least 35 cm.
+`detection_improved` measures objects using registered OAK depth by default, with
+floor checks and merged object pieces. Its histogram node retains both display
+branches and marks measured openings of at least 35 cm.
 The rover launch supplies a six-widget Vizanti layout for new browser sessions.
 Saved dashboards migrate their managed perception topics on reload while keeping
 widget positions. You can also import `src/polar_hist/config/vizanti_layout.json`
@@ -155,8 +172,8 @@ The dashboard also includes `/wls_filtered/compressed` and a colorized metric
 depth view. When Vizanti is enabled, `wls_depth_preview` converts
 `/wls_filtered/compressedDepth` (PNG transport) into
 `/wls_filtered/depth_preview/compressed`. The rover starts `ugv_vision/wls_depth` by default (`wls:=false` disables it).
-It applies RGB-guided WLS smoothing to inverse metric depth at up to 640 pixels
-wide and 10 Hz. Both improved detectors and the 3D view use
+It applies RGB-guided WLS smoothing to inverse metric depth at up to 320 pixels
+wide and 10 Hz. The shared improved detector and the 3D view use
 `/wls_filtered/compressedDepth`, with `/wls_filtered/camera_info` scaled to match.
 The preview renders those same measurements; it is not itself a metric input.
 The obstacle branch defaults to depth too; `obstacle_range_source:=lidar` restores

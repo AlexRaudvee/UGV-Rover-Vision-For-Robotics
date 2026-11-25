@@ -1,0 +1,20 @@
+# Preview only: no route search or motor commands are started by this map.
+resolution_m: 0.05
+# Temporary preview experiment: preserve delayed observations long enough to see them.
+free_memory_s: 4.0
+obstacle_memory_s: 4.0
+max_input_age_s: 4.0
+max_pose_age_s: 1.0
+max_position_std_m: 0.5
+max_heading_std_deg: 20.0
+detector_topic: /detection_improved/object/detections
+map_frame: map
+odom_frame: odom
+
+# Paper dimensions are NOT floor dimensions. These are editable, unmeasured
+# provisional stand/base footprints, centred on their marker-map coordinates.
+default_stand_size_m: [0.30, 0.30]  # width, depth
+stand_size_overrides: {}          # e.g. {APRILTAG_standard41h12:0: [0.30, 0.20]}
+stand_yaw_deg: {}
+measured_stands: []
+excluded_stands: []               # Exclude tags on walls with no floor obstacle.
