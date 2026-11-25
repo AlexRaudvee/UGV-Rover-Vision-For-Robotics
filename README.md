@@ -30,9 +30,9 @@ Leave this terminal open. Ctrl+C stops this foreground ROS session; the containe
 remains running. This does not install a service that launches ROS at boot or on
 every `docker start`.
 
-Odometry now defaults to LiDAR/wheel/IMU fusion, with conservative wheel weighting
-and no wheel-turn calibration required. Build RF2O once with `--build`. Use
-`odometry:=legacy` for the previous estimator. See the
+Odometry defaults to wheel speed and IMU yaw rate. RF2O runs for comparison;
+use `odometry:=lidar` to fuse its estimates into `/odom` or `odometry:=legacy`
+for the original estimator. See the
 [odometry guide](src/ugv_main/ugv_bringup/ODOMETRY.md) for topics, diagnostics,
 limitations, and isolated synthetic tests.
 

@@ -1,0 +1,28 @@
+# Scaled from camera_info.yaml by 1.25 in each image axis.
+# This assumes the 800x600 camera mode preserves the 640x480 field of view.
+image_width: 800
+image_height: 600
+camera_name: pt_camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [361.3931375, 0., 434.0458,
+         0., 362.1914875, 294.5928625,
+         0., 0., 1.]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.208848, 0.028006, -0.000705, -0.000820, 0.000000]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1., 0., 0.,
+         0., 1., 0.,
+         0., 0., 1.]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [246.12215, 0., 428.60905, 0.,
+         0., 293.1644875, 289.4283375, 0.,
+         0., 0., 1., 0.]

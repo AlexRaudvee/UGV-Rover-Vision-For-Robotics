@@ -29,14 +29,6 @@ ekf_filter_node:
                    false, false, false,
                    false, false, false]
     odom0_queue_size: 10
-    odom1: /odom_rf2o
-    odom1_config: [false, false, false,
-                   false, false, false,
-                   true, true, false,
-                   false, false, true,
-                   false, false, false]
-    odom1_queue_size: 5
-    odom1_twist_rejection_threshold: 4.0  # Reject scan-match velocity outliers, in standard deviations.
     imu0: /imu/estimation
     imu0_config: [false, false, false,
                   false, false, false,

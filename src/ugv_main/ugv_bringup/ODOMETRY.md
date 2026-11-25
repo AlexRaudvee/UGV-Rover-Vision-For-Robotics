@@ -1,6 +1,9 @@
 # LiDAR, wheel and IMU odometry
 
-Daily startup now selects `odometry:=lidar`. No wheel calibration procedure is
+Daily startup selects `odometry:=wheel_imu`. The local EKF uses wheel speed and
+IMU yaw rate, with RF2O available separately on `/odom_rf2o` for comparison.
+Select `odometry:=lidar` to add RF2O measurements back into `/odom`.
+No wheel calibration procedure is
 required to start using it. Existing wheel-distance units/scaling are retained,
 with a deliberately weak forward-velocity weight. Wheel separation and wheel
 turn estimates are not used by this mode. Wheel scale error can still affect the
@@ -36,13 +39,14 @@ Obstacle detection/avoidance packages are independent of this integration.
   publishes base-frame forward/lateral velocity and yaw rate on `/odom_rf2o`.
   Its assumed velocity standard deviations are 0.05 m/s and 0.05 rad/s.
   These are provisional uncertainty settings, not experimentally calibrated.
-  The EKF rejects LiDAR twist innovations beyond four standard deviations.
+  In `odometry:=lidar` mode, the EKF rejects LiDAR twist innovations beyond four
+  standard deviations.
 - `robot_localization` produces `/odom` at 30 Hz and is the only publisher of
   `odom -> base_footprint`. `ekf_lidar.yaml` selects velocity measurements only;
   it does not count the corresponding integrated poses again.
-- Advanced avoidance uses fused forward velocity together with physical gyro
-  heading for its separate mission estimate. It no longer publishes/fuses a
-  known-square landmark correction. See the controller README for its limits.
+- Advanced avoidance uses wheel forward velocity and physical gyro heading for
+  its separate mission estimate. The marker EKF uses `/odom` for prediction and
+  AprilTags for field corrections. LiDAR obstacle detection still uses `/scan`.
 
 The estimator origin is at startup, with zero initial yaw. For a later mission
 start, save its current pose and express subsequent poses relative to that pose.

@@ -15,6 +15,7 @@ class PanController:
         if not math.isfinite(search_reach) or not 0 <= search_reach < 90:
             raise ValueError('search_reach must be between 0 and 90 deg')
         self.one_marker, self.search_reach, self.search_dir = one_marker, search_reach, 1.
+        self.zero_marker_search_dir = 1.
         if len(ids) < 2 or len(set(ids)) != len(ids) or any(type(tag) is not int or tag < 0 for tag in ids):
             raise ValueError('Specify at least two distinct nonnegative integer target IDs')
         if type(missing_frames) is not int or missing_frames < 1:
@@ -65,6 +66,15 @@ class PanController:
                 # Reached this side (tag now at the image edge): look the other way.
                 self.search_dir = -self.search_dir
             self.mode = 'searching_with_one_marker'
+        elif not self.tracked_ids:
+            if self.mode != 'searching_without_markers':
+                # Start with the nearer edge so the sweep reverses sooner.
+                self.zero_marker_search_dir = -1. if self.pan < 0. else 1.
+            target = self.zero_marker_search_dir * self.limit
+            if math.isclose(self.pan, target, abs_tol=1e-9):
+                self.zero_marker_search_dir *= -1.
+                target = self.zero_marker_search_dir * self.limit
+            self.mode = 'searching_without_markers'
         else:
             target, self.mode = 0., 'centering'
         target = max(-self.limit, min(self.limit, target))

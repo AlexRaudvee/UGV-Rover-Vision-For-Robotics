@@ -15,11 +15,14 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
     odometry_arg = DeclareLaunchArgument(
-        'odometry', default_value='legacy', choices=['legacy', 'lidar'])
+        'odometry', default_value='legacy', choices=['legacy', 'lidar', 'wheel_imu'])
     lidar_odometry = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(
             get_package_share_directory('ugv_bringup'), 'launch', 'odometry_lidar.launch.py')),
-        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('odometry'), "' == 'lidar'"]))
+        condition=IfCondition(PythonExpression(["'", LaunchConfiguration('odometry'), "' != 'legacy'"])),
+        launch_arguments={'fuse_lidar': PythonExpression([
+            "'true' if '", LaunchConfiguration('odometry'), "' == 'lidar' else 'false'"
+        ])}.items(),
     )
     lidar_crop_arg = DeclareLaunchArgument('lidar_crop', default_value='true')
     # Declare launch arguments   

@@ -25,7 +25,7 @@ marker_pan_tracker:
     fov_range_m: 4.0
     # Only one tag in view: 'center' = turn back to 0 deg, 'search' = keep the tag
     # in view and swing up to search_reach_deg to each side to find a second one.
-    one_marker: center
+    one_marker: search
     search_reach_deg: 36.0
     # Manual camera commands on /localization/pan_tilt_manual (e.g. the game
     # controller) take over; automatic tracking resumes this long after the last one.

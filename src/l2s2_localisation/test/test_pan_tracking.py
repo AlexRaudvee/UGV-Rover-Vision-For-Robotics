@@ -34,10 +34,11 @@ def test_speed_is_bounded_in_both_directions_and_after_a_timer_stall():
     assert c.step(.05, .05) == pytest.approx(.4)
     assert c.step(10, .1) == pytest.approx(1.2)
     c.tracks.clear()
-    assert c.step(.05, .15) == pytest.approx(.8)
+    c.pan = c.limit
+    assert c.step(.05, .15) == pytest.approx(c.limit - .4)
 
 
-def test_only_one_tag_or_a_dead_detector_returns_to_exact_zero():
+def test_one_tag_centers_by_default_and_expired_tags_trigger_a_sweep():
     c = PanController([2, 3])
     c.pan = 2
     c.observe({2: 30}, 0)
@@ -45,11 +46,24 @@ def test_only_one_tag_or_a_dead_detector_returns_to_exact_zero():
     c.observe({2: 20, 3: 40}, .2)
     c.step(.05, .2)
     assert c.mode == 'tracking_markers'
-    c.step(.05, 1.1)
-    assert c.mode == 'centering'
-    for _ in range(20):
-        c.step(.05, 1.2)
-    assert c.pan == 0
+    before = c.pan
+    assert c.step(.05, 1.1) > before
+    assert c.mode == 'searching_without_markers'
+
+
+def test_zero_tags_sweeps_both_limits_until_a_tag_reappears():
+    c = PanController([2, 3], limit=4., speed=8., one_marker='search', search_reach=2.)
+    pans = [c.step(.1, frame*.1) for frame in range(18)]
+    assert c.mode == 'searching_without_markers'
+    assert max(pans) == pytest.approx(4.)
+    assert min(pans) == pytest.approx(-4.)
+    assert pans[-1] > pans[-3]
+    c.observe({2: -3.}, 1.8)
+    assert c.step(.1, 1.8) < pans[-1]
+    assert c.mode == 'searching_with_one_marker'
+    c.observe({2: -3., 3: 12.}, 1.9)
+    c.step(.1, 1.9)
+    assert c.mode == 'tracking_markers'
 
 
 def test_deadband_stops_noise_and_smoothing_reduces_a_bad_frame():

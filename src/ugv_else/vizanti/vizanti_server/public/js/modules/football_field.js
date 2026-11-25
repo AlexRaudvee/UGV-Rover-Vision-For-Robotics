@@ -282,10 +282,15 @@ export class FieldClient {
     }
     get cameraStatus() {
         if (!this.cameraFov.length) return '';
+        const modes = {
+            searching_without_markers: 'sweeping for tags',
+            searching_with_one_marker: 'searching for a second tag',
+            manual: 'manual control',
+        };
         return `Camera view (estimated) ${this.camera.horizontal_fov_deg.toFixed(0)}° · ` +
             (['tracking_markers', 'tracking_pair'].includes(this.camera.mode) ?
                 (Array.isArray(this.camera.tracked_ids) ? `tracking ${this.camera.tracked_ids.length} tags` : 'tracking tags') :
-                'centering forward');
+                modes[this.camera.mode] || 'centering forward');
     }
     get markerVisuals() {
         return markerVisuals(this.ranges, (performance.now()-this.lastRanges)/1000,

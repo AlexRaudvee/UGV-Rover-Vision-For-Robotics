@@ -213,8 +213,9 @@ advances at most 8 degrees/second at 20 Hz. Tilt stays at the configured angle.
 A target survives two consecutive missing frames and is discarded on the third.
 Reappearance resets its counter. Tracking continues while at least two targets
 are retained. Losing one of three or more does not force a return to zero.
-With fewer than two, the camera smoothly returns to pan 0, even if one
-tag remains visible. The configurable observation timeout also handles a stopped
+With one tag, the rover's configuration sweeps up to 36 degrees either side
+of its bearing to find a second tag. With zero tags, the camera sweeps between
+both pan limits until it reacquires a tag. The observation timeout also handles a stopped
 detector. Stale/duplicate frames do not refresh tracks, and decoder quality
 checks reject weak IDs. All tags cannot stay visible when they are farther
 apart than the camera's view or outside its pan limits.
@@ -226,12 +227,14 @@ Edit **`config/pan_tracking.yaml`** and restart localization:
 | `target_ids` | `[0, 1, 2, 3, 4, 5]` | Allowed physical tag IDs; any two or more can drive tracking |
 | `missing_frames` | `3` | Consecutive missed frames before losing a target |
 | `detection_timeout_s` | `1` | Maximum time without a usable observation |
-| `max_speed_deg_s` | `8.0` | Pan setpoint rate, tracking and returning |
+| `max_speed_deg_s` | `8.0` | Pan setpoint rate while tracking or searching |
 | `deadband_deg` | `3.0` | Ignore small angular errors |
 | `smoothing_alpha` | `0.25` | Smaller values smooth more, with more delay |
 | `gain` | `0.7` | Fraction of filtered error used for each target |
 | `max_pan_deg` | `120.0` | Limit either side of forward |
 | `tilt_deg` | `0.0` | Fixed tilt; positive looks up |
+| `one_marker` | `search` | Search near the remaining tag, or use `center` to face forward |
+| `search_reach_deg` | `36.0` | Search angle on either side of a single tag |
 | `horizontal_fov_deg` | `0.0` | Zero uses calibration; positive overrides it |
 | `fov_range_m` | `4.0` | Sector drawing length, not a detection range limit |
 
@@ -272,8 +275,8 @@ ros2 topic echo /ugv/pan_tilt_commanded --once
 ```
 
 Tracker state includes `tracked_ids` (including tags briefly retained through
-dropouts) and `mode: tracking_markers` or `centering`. Vizanti displays the number
-of retained tags while tracking. Extend `target_ids` when adding another field
+dropouts) and the current mode. Vizanti displays the number of retained tags
+while tracking and distinguishes full sweeps from single-tag searches. Extend `target_ids` when adding another field
 marker; its known coordinates remain configured separately in `marker_map.yaml`.
 
 ## Live triangulation beside odometry

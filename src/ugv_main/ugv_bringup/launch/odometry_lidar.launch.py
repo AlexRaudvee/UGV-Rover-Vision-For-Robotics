@@ -4,10 +4,28 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+def local_ekf(context, config, clock):
+    parameters = [config, clock]
+    if LaunchConfiguration('fuse_lidar').perform(context) == 'true':
+        parameters.append({
+            'odom1': '/odom_rf2o',
+            'odom1_config': [False, False, False,
+                             False, False, False,
+                             True, True, False,
+                             False, False, True,
+                             False, False, False],
+            'odom1_queue_size': 5,
+            'odom1_twist_rejection_threshold': 4.0,
+        })
+    return [Node(package='robot_localization', executable='ekf_node', name='ekf_filter_node',
+                 parameters=parameters, output='screen',
+                 remappings=[('/odometry/filtered', '/odom')])]
 
 
 def generate_launch_description():
@@ -15,6 +33,7 @@ def generate_launch_description():
     clock = {'use_sim_time': ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)}
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('fuse_lidar', default_value='true', choices=['true', 'false']),
         Node(package='ugv_bringup', executable='odometry_inputs',
              name='odometry_inputs', parameters=[config, clock], output='screen'),
         Node(package='rf2o_laser_odometry', executable='rf2o_laser_odometry_node',
@@ -26,7 +45,5 @@ def generate_launch_description():
                  'max_scan_gap': 0.5, 'max_linear_speed': 1.5,
                  'max_angular_speed': 3.0,
              }]),
-        Node(package='robot_localization', executable='ekf_node', name='ekf_filter_node',
-             parameters=[config, clock], output='screen',
-             remappings=[('/odometry/filtered', '/odom')]),
+        OpaqueFunction(function=local_ekf, args=[config, clock]),
     ])
