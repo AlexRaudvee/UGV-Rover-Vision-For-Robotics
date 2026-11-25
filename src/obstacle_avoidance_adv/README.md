@@ -1,7 +1,8 @@
 # obstacle_avoidance_adv
 
-LiDAR-first controller for a straight 5–10 m mission and a fixed obstacle-bypass
-sequence. Launching never starts a mission. Call the start service explicitly.
+LiDAR-first controller for the five curling field targets or a straight 5–10 m
+mission, with EKF goal guidance and a fixed obstacle-bypass sequence. Launching
+never starts a mission. Call the start service explicitly.
 
 ## Motion
 
@@ -111,16 +112,25 @@ physical braking and slip have not been measured. A short approach need not reac
 - `/detection_improved/obstacle/detections`: optional WLS depth obstacle outlines.
   Delayed measurements are compensated using mission pose history. NaN/missing
   depth, no detections, or unavailable camera TF do not block LiDAR navigation.
+- `/marker_ekf/pose`: required field-frame pose for goal direction, remaining
+  distance and arrival in APPROACH/REJOIN. Wheel/gyro integration still supplies
+  continuous coordinates for obstacle history and physical bypass distances.
+- `/football_field/state`: required assumed start and alignment revision. The
+  starting heading is zero. With `target_run:=1` through `5`, the map endpoint
+  is the selected assignment coordinate. With `target_run:=0` (the default),
+  it is `(start_x_m + goal_distance, start_y_m)`. Marker corrections never move it.
 
-Only LiDAR, gyro and forward odometry must be available, with a 1.5 s acquisition
-and receipt timeout. Brief failures hold motion; five seconds of input loss
+LiDAR, gyro and forward odometry have a 1.5 s acquisition and receipt timeout.
+The EKF and its last timestamp-matched alignment have a 1 s timeout, and field
+metadata must have been received within 1.5 s. Brief failures hold motion; five seconds of input loss
 latches a fault. Another publisher on the selected command topic also faults.
 A blocked corridor waits for clearance instead of assuming it is free.
 
-There is no cube face/size registration, persistent costmap, or static-landmark
-localizer. `/static_obstacle_localizer/status` and `/obstacle_anchor/pose` are no
-longer used. Mission odometry still accumulates distance and gyro errors: this
-change does not provide drift-free localization or a physical success guarantee.
+There is no cube face/size registration or persistent costmap. Global goal
+guidance uses the external marker EKF; `/static_obstacle_localizer/status` and
+`/obstacle_anchor/pose` are no longer used. Local mission odometry still accumulates
+distance and gyro errors, while accepted marker corrections adjust goal guidance.
+This does not provide drift-free localization or a physical success guarantee.
 The LiDAR plane can miss obstacles above/below it when depth is unavailable.
 
 All settings are in `config/controller.yaml`. The footprint defaults to 0.26 m
@@ -129,7 +139,99 @@ these values. In-place turns check measured obstacles against the circumscribed
 footprint. Missing rear rays do not prove rear clearance; initial turns need space
 around the rover. Reverse movement is used only for the back-up described above (at most 0.30 m).
 
+## EKF goal guidance and comparison
+
+The controller uses `/marker_ekf/pose` for goal guidance and adds `ekf` and
+`navigation` objects to `/obstacle_avoidance_adv/status`. Configure
+`ekf_pose_topic`, `ekf_frame` and `ekf_timeout` in `config/controller.yaml`.
+
+EKF and wheel/gyro poses are aligned at the same acquisition timestamp. This
+alignment translates and rotates the fixed map goal into the continuous motion
+frame. Existing APPROACH/REJOIN steering and arrival checks therefore use the
+EKF-corrected distance and bearing. `navigation.pose_map` advances the matched
+EKF pose by subsequent wheel/gyro motion; `goal_map_m` remains fixed, while
+`goal_motion_m` changes when localisation corrects. No EKF pose overwrites local
+scan history, committed bypass targets, turn headings or manoeuvre progress.
+
+Start rejects missing, malformed, stale or excessively uncertain EKF data and
+missing/stale field metadata. Motion waits for the first matched sample. If a newer EKF sample
+arrives before its matching wheel callback, the last alignment may be retained
+only until its own acquisition/receipt timeout. An alignment reset or changed
+assumed start holds motion and requires a new mission; it does not move the goal.
+
+The diagnostic reports field-frame position, heading, acquisition/receipt age
+and planar standard deviations. `valid` checks the frame, finite values,
+orientation and covariance structure; `fresh` additionally checks both ages.
+`within_uncertainty_limits` separately checks `max_position_std_m` (default
+0.50 m) and `max_heading_std_deg` (default 20 degrees). Position uncertainty is
+the square root of the largest eigenvalue of the x/y covariance block, so
+correlated diagonal uncertainty is included. Status reports `sigma_position_m`,
+both configured limits, and `uncertainty_reason` when a limit is exceeded.
+
+Excessive uncertainty rejects start or immediately holds motion. Recovery within
+five seconds uses the existing clearance wait and acceleration ramp before
+resuming; a continuous hold longer than five seconds faults the mission. These
+provisional limits allow the current assumed-start EKF uncertainty of 0.30 m /
+15 degrees. They are filter confidence limits, not guaranteed error bounds or
+evidence of the 8 cm physical arrival accuracy; physical tuning remains necessary.
+
+For `ekf.comparison`, the controller captures the assumed start supplied by
+`/football_field/state` when its existing start service is called. A zero starting
+heading is required for this comparison. The EKF pose is translated into that
+start-relative frame and compared with interpolated wheel/gyro history at the
+EKF acquisition time. Position and heading differences are EKF minus wheel/gyro.
+This assumes the physical mission began at the configured start and heading.
+Comparison is withheld while idle, without matching history, after an alignment
+change, or when pose/field metadata is stale. Its `reason` explains why.
+
+Synthetic tests require a sourced ROS environment and run on isolated domain
+109 with a private command topic. They do not start hardware or a driving mission:
+
+```bash
+PYTHONPATH=src/obstacle_avoidance_adv:$PYTHONPATH python3 -m pytest -q \
+  src/obstacle_avoidance_adv/test/test_ekf_observer.py \
+  src/obstacle_avoidance_adv/test/test_ekf_navigation.py \
+  src/obstacle_avoidance_adv/test/test_ekf_uncertainty.py \
+  src/obstacle_avoidance_adv/test/test_pose_frames.py
+```
+
+These checks validate transport, coordinate/time matching, corrected goal
+steering and arrival, retained bypass progress, and stale/invalid input handling.
+They do not measure real driving accuracy.
+
 ## Start
+
+Select a curling target with `target_run:=1` through `target_run:=5`:
+
+| Run | Target | Field `(x, y)` metres |
+|---|---|---|
+| 1 | Penalty mark | `(3.20, 0.00)` |
+| 2 | Goal area corner right | `(3.90, 1.10)` |
+| 3 | Goal area corner left | `(3.90, -1.10)` |
+| 4 | Penalty area corner right | `(2.85, 2.00)` |
+| 5 | Penalty area corner left | `(2.85, -2.00)` |
+
+The table is shared with `l2s3_curling.path_plan`. The assumed start initializes
+localisation; changing it does not shift a curling target. Selection is read-only
+for each controller process, so restart the controller to change runs. Status
+includes `navigation.target_run`, `target_name` and `goal_map_m` after start.
+
+The Football Field and 3D widgets in Vizanti automatically draw a yellow duck
+at the controller's selected target, with its run/name and field coordinates.
+The ring below the duck marks the exact goal position. The controller's `goal`
+status field supplies the marker, including an idle preview before the start
+service is called; no separate visual planner is required. Missing/stale status
+(over 2.5 s), malformed goals and mismatched field frames hide the marker.
+After source changes, rebuild `obstacle_avoidance_adv` and `vizanti_server`,
+restart the controller, and hard-refresh the browser to load the updated assets.
+
+```bash
+# Private preview output; no motor commands. Still waits for the start service.
+bash start_rover.sh --build avoidance:=true target_run:=1
+```
+
+For the existing distance mission, leave `target_run:=0` and set `goal_distance`.
+The `goal_distance` parameter only determines the endpoint in that mode.
 
 On the host, stop the old launch and build once:
 

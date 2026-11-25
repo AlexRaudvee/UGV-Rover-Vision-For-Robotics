@@ -1,4 +1,4 @@
-const {FieldClient} = await import(`${base_url}/js/modules/football_field.js`);
+const {FieldClient, drawGoalDuck} = await import(`${base_url}/js/modules/football_field.js`);
 const {view} = await import(`${base_url}/js/modules/view.js`);
 const {tf} = await import(`${base_url}/js/modules/tf.js`);
 const {settings} = await import(`${base_url}/js/modules/persistent.js`);
@@ -92,6 +92,14 @@ function render(now) {
         }
         ctx.fillStyle = pose.color; ctx.font = 'bold 13px sans-serif';
         ctx.fillText(pose.text, p.x+12, p.y+(pose.odom !== undefined ? 22 : -24));
+    }
+    const goal = field.goalVisual;
+    if (goal) {
+        const p = screen(goal.position);
+        drawGoalDuck(ctx, p.x, p.y);
+        ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 4; ctx.strokeStyle = '#19382e';
+        ctx.strokeText(goal.text, p.x+25, p.y-25);
+        ctx.fillStyle = '#ffe16a'; ctx.fillText(goal.text, p.x+25, p.y-25);
     }
     el('markers_status').textContent = [field.rangeStatus, field.cameraStatus, field.localizationStatus].filter(Boolean).join(' · ');
     el('status').textContent = !field.connected ? 'Field server unavailable' :

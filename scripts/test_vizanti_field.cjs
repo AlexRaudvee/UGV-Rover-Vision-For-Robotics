@@ -32,7 +32,7 @@ const state=vm.createContext({mocks,console,performance:{now:()=>now},
     },ServiceRequest:class {constructor(values){Object.assign(this,values);}}}});
 const moduleSource=fs.readFileSync(base+'js/modules/football_field.js','utf8')
     .replace(/^import .*$/m,'const {rosbridge}=mocks;').replace(/export /g,'');
-    vm.runInContext(`Object.assign(mocks,(()=>{${moduleSource};return {FieldClient,transformFieldPoint,markerVisuals,cameraFov,triangulationVisual};})());`,state);
+    vm.runInContext(`Object.assign(mocks,(()=>{${moduleSource};return {FieldClient,transformFieldPoint,markerVisuals,cameraFov,triangulationVisual,avoidanceGoalVisual,drawGoalDuck};})());`,state);
 const source=fs.readFileSync(base+'templates/footballfield/footballfield_script.js','utf8')
     .replace(/^const (\{.*\}) = await import.*$/gm,'const $1 = mocks;');
 vm.runInContext(source,state);
@@ -52,7 +52,25 @@ listeners['/marker_pan_tracker/state']({data:JSON.stringify(camera)});
 const fix={fresh:true,frame_id:'map',field_revision:2,position_m:[-2.9,.2,0],heading_deg:15,
     odom_position_m:[-3.2,0,0],position_delta_m:.36,age_s:.1,stale_after_s:1,used_ids:['tag:0','tag:5']};
 listeners['/marker_triangulation/result']({data:JSON.stringify(fix)});
+const avoidance={state:'IDLE',goal:{frame_id:'map',position_m:[3.2,0],target_run:1,target_name:'Penalty mark'}};
+listeners['/obstacle_avoidance_adv/status']({data:JSON.stringify(avoidance)});
 frame(1000);
+assert(drawn.some(d=>d[0]==='fillText' && d[1]==='RUN 1 · Penalty mark (3.20, 0.00)'),
+    'selected goal missing before the mission starts');
+assert(drawn.some(d=>d[0]==='translate' && d[1]===660 && d[2]===400),
+    'duck was not anchored at the target field coordinate');
+assert(drawn.some(d=>d[0]==='ellipse' && d[1]===0 && d[2]===0 && d[3]===12 && d[4]===4),
+    'duck target ring was not drawn');
+for (const [run,position] of [[1,[3.2,0]],[2,[3.9,1.1]],[3,[3.9,-1.1]],[4,[2.85,2]],[5,[2.85,-2]]]) {
+    const goal=mocks.avoidanceGoalVisual({goal:{...avoidance.goal,target_run:run,position_m:position}},0,'map');
+    assert.equal(goal.position[0],position[0]);assert.equal(goal.position[1],position[1]);
+    assert(goal.text.startsWith(`RUN ${run}`));
+}
+assert.equal(mocks.avoidanceGoalVisual(avoidance,3,'map'),null,'stale controller goal remained visible');
+assert.equal(mocks.avoidanceGoalVisual(avoidance,0,'odom'),null,'goal used the wrong coordinate frame');
+assert.equal(mocks.avoidanceGoalVisual(avoidance,0,undefined),null);
+assert.equal(mocks.avoidanceGoalVisual({goal:null},0,'map'),null);
+assert.equal(mocks.avoidanceGoalVisual({goal:{...avoidance.goal,position_m:[NaN,0]}},0,'map'),null);
 assert(drawn.some(d=>d[0]==='fillText' && d[1]==='ODOM (-3.20, 0.00)'),'live odometry marker missing in 2D');
 assert(drawn.some(d=>d[0]==='fillText' && d[1]==='TRIANGULATION (-2.90, 0.20)'),
     'independent triangulation marker missing in 2D');
@@ -88,8 +106,13 @@ const mapped=mocks.transformFieldPoint([2,-1,Math.PI/2],[1,2,3]);
 assert(Math.abs(mapped[0])<1e-12 && Math.abs(mapped[1])<1e-12 && mapped[2]===3);
 async function main(){
     drawn.length=0;
+    listeners['/obstacle_avoidance_adv/status']({data:JSON.stringify({state:'IDLE',goal:{
+        ...avoidance.goal,target_run:5,target_name:'Penalty area corner left',position_m:[2.85,-2]}})});
     listeners['/marker_triangulation/result']({data:JSON.stringify({...fix,fresh:false,error:'need at least two markers'})});
     frame(1100);
+    assert(drawn.some(d=>d[0]==='fillText' && d[1]==='RUN 5 · Penalty area corner left (2.85, -2.00)'),
+        'changing selected run did not move the duck');
+    assert(!drawn.some(d=>d[0]==='fillText' && d[1].startsWith('RUN 1')),'previous goal remained drawn');
     assert(!drawn.some(d=>d[0]==='fillText' && d[1].startsWith('TRIANGULATION')),'invalidated fix remained drawn');
     assert.match(elements['{uniqueID}_markers_status'].textContent,/need at least two markers/);
     const input=elements['{uniqueID}_start_x_m']; input.value='1.25';input.input();
@@ -117,6 +140,10 @@ async function main(){
     assert.match(elements['{uniqueID}_markers_status'].textContent,/Δ fused pose 0.36 m/);
     assert.equal(elements['{uniqueID}_save_start'].disabled,false,'EKF start controls were disabled');
     assert.equal(elements['{uniqueID}_apply_start'].disabled,false,'EKF reset was disabled');
+    drawn.length=0;now=4000;frame(1300);
+    assert(!drawn.some(d=>d[0]==='fillText' && d[1].startsWith('RUN ')),
+        '2D renderer retained a stale goal after controller status stopped');
+    now=1000;
     listeners['/football_field/state']({data:JSON.stringify({...fieldState,publish_tf:false,
         start_control_enabled:false,pose_source:'external'})});
     assert.equal(elements['{uniqueID}_apply_start'].disabled,true,'unrelated external localization can be reset');
@@ -146,6 +173,6 @@ async function main(){
     assert(migration.result.navbar.some(w=>w.id==='my_grid'));
     vm.runInContext('globalThis.reload = new Settings();',migration);
     assert.equal(migration.reload.navbar.filter(w=>w.id==='football_field').length,1);
-    console.log('PASS: 2D odometry/triangulation comparison, FOV, alignment, controls, expiry and cleanup');
+    console.log('PASS: 2D duck goals, selection, frames, expiry, localization, controls and cleanup');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

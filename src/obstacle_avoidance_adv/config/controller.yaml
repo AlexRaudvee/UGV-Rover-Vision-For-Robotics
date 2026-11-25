@@ -1,5 +1,6 @@
 obstacle_avoidance_adv:
   ros__parameters:
+    target_run: 0                 # 1..5: fixed curling target; 0: legacy goal_distance mission.
     goal_distance: 5.0
     speed: 0.3                    # Manufacturer's cruise ceiling; braking/coverage cap the actual command.
     avoidance_speed: 0.2
@@ -36,6 +37,13 @@ obstacle_avoidance_adv:
     resume_clear_time: 0.2
     scan_topic: /scan
     odom_topic: /odom/wheels      # Run 10c: fused /odom under-reported distance by ~35% on turf; wheels matched LiDAR within ~5%.
+    # Required for goal steering and arrival; bypass distances still use wheel/gyro motion.
+    ekf_pose_topic: /marker_ekf/pose
+    ekf_frame: map
+    ekf_timeout: 1.0             # Maximum acquisition/receipt age, including the last matched alignment.
+    # Provisional standard-deviation limits; allow the assumed-start EKF uncertainty.
+    max_position_std_m: 0.50     # Largest position standard deviation in any horizontal direction.
+    max_heading_std_deg: 20.0
     imu_topic: /imu/estimation
     detection_topic: /detection_improved/obstacle/detections
     base_frame: base_footprint

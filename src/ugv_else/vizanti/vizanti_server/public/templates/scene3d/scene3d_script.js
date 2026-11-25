@@ -1,7 +1,7 @@
 // A perspective view over existing ROS messages; no new rendering dependency.
 const {rosbridge} = await import(`${base_url}/js/modules/rosbridge.js`);
 const {settings} = await import(`${base_url}/js/modules/persistent.js`);
-const {FieldClient, transformFieldPoint} = await import(`${base_url}/js/modules/football_field.js`);
+const {FieldClient, transformFieldPoint, drawGoalDuck} = await import(`${base_url}/js/modules/football_field.js`);
 const el = name => document.getElementById(`{uniqueID}_${name}`);
 const panel = el('panel'), canvas = el('canvas'), ctx = canvas.getContext('2d');
 const config = settings['{uniqueID}'] || {enabled: true};
@@ -206,6 +206,15 @@ function render() {
             ctx.fillStyle='#f7c76b'; ctx.font='bold 13px sans-serif';
             ctx.fillText(`ODOM (${r.x.toFixed(2)}, ${r.y.toFixed(2)})`,label[0]+8,label[1]-8);
         }
+    }
+    const goal = layout ? field.goalVisual : null;
+    const goalPoint = goal ? project(goal.position) : null;
+    if (goalPoint) {
+        // Billboard the duck at its field coordinate; do not transform it through odometry again.
+        drawGoalDuck(ctx, goalPoint[0], goalPoint[1]);
+        ctx.font='bold 13px sans-serif'; ctx.lineWidth=4; ctx.strokeStyle='#19382e';
+        ctx.strokeText(goal.text,goalPoint[0]+25,goalPoint[1]-25);
+        ctx.fillStyle='#ffe16a'; ctx.fillText(goal.text,goalPoint[0]+25,goalPoint[1]-25);
     }
     const now=performance.now(), odomFresh=lastOdom && now-lastOdom<1000;
     const state=displayRobot ? `x ${displayRobot.x.toFixed(2)} m · y ${displayRobot.y.toFixed(2)} m · yaw ${(Math.atan2(Math.sin(displayRobot.yaw),Math.cos(displayRobot.yaw))*180/Math.PI).toFixed(1)}°` : 'Waiting for /odom or start alignment';

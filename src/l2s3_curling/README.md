@@ -10,8 +10,18 @@ Session 3 target-planning code lives here, moved from `l2s2_localisation`.
 
 The planner displays a path; it does not publish motor commands or avoid obstacles.
 The shared detection, triangulation, pan tracking and EKF remain in the Session 1/2
-packages. Existing obstacle avoidance remains in `obstacle_avoidance_adv`; its
-intermediate stops need adapting for the curling match's single-stop rule.
+packages. Existing obstacle avoidance remains in `obstacle_avoidance_adv` and can
+now drive towards these targets using the marker EKF. Intermediate stops are
+permitted under the TA's update.
+
+After rebuilding, select the avoidance target from the host with
+`bash start_rover.sh avoidance:=true target_run:=1` (runs 1 through 5).
+This starts the controller idle with private preview commands. The existing
+`avoidance_drive:=true` option enables motor output; the start service remains
+required. See the [controller guide](../obstacle_avoidance_adv/README.md#start).
+Vizanti's field and 3D views draw the controller's selected goal as a yellow duck,
+including before movement starts. The visual path planner remains separate;
+select the same run if using its additional path/marker overlays.
 
 ## Build and run
 

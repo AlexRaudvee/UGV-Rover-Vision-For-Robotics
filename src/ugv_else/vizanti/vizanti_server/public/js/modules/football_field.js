@@ -57,15 +57,53 @@ export function triangulationVisual(result, ageSeconds, revision, frame) {
         color: '#ff79df', text: `TRIANGULATION (${result.position_m[0].toFixed(2)}, ${result.position_m[1].toFixed(2)})`};
 }
 
+// The controller is the only authority for target selection; never duplicate its table here.
+export function avoidanceGoalVisual(status, ageSeconds, frame) {
+    const goal = status?.goal;
+    if (!goal || typeof frame !== 'string' || !frame || goal.frame_id !== frame ||
+        !Number.isFinite(ageSeconds) || ageSeconds < 0 || ageSeconds > 2.5 ||
+        !Array.isArray(goal.position_m) || goal.position_m.length !== 2 || !goal.position_m.every(Number.isFinite) ||
+        !Number.isInteger(goal.target_run) || goal.target_run < 0 || goal.target_run > 5 ||
+        typeof goal.target_name !== 'string') return null;
+    const [x, y] = goal.position_m;
+    return {position: [x, y, .025],
+        text: `${goal.target_run ? `RUN ${goal.target_run}` : 'GOAL'} · ${goal.target_name} (${x.toFixed(2)}, ${y.toFixed(2)})`};
+}
+
+// A small vector duck stays readable at every zoom level and needs no image/font download.
+// The ring marks the exact target coordinate; the duck sits immediately above it.
+export function drawGoalDuck(ctx, x, y, size = 36) {
+    ctx.save(); ctx.translate(x, y); ctx.scale(size / 40, size / 40);
+    ctx.strokeStyle = '#ffe16a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.ellipse(0, 0, 12, 4, 0, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(0,0,0,.25)';
+    ctx.beginPath(); ctx.ellipse(0, -2, 14, 4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd431'; ctx.strokeStyle = '#956400'; ctx.lineWidth = 1.3;
+    ctx.beginPath(); ctx.moveTo(-10, -11); ctx.lineTo(-19, -20); ctx.lineTo(-17, -7);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(-1, -12, 14, 10, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(8, -25, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ff8d24';
+    ctx.beginPath(); ctx.moveTo(14, -27); ctx.lineTo(24, -23); ctx.lineTo(14, -20);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#f1b91b';
+    ctx.beginPath(); ctx.ellipse(-3, -11, 7, 4, -.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#222b2b';
+    ctx.beginPath(); ctx.arc(10, -27, 1.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+}
+
 export class FieldClient {
     constructor(onUpdate = () => {}) {
-        this.layout = this.state = this.ranges = this.camera = this.triangulation = null;
+        this.layout = this.state = this.ranges = this.camera = this.triangulation = this.avoidance = null;
         this.lastState = this.lastRanges = this.lastCamera = this.lastTriangulation = 0;
+        this.lastAvoidance = 0;
         this.listeners = new Set([onUpdate]);
-        this.topics = ['layout', 'state', 'ranges', 'camera', 'triangulation'].map(kind => {
+        this.topics = ['layout', 'state', 'ranges', 'camera', 'triangulation', 'avoidance'].map(kind => {
             const name = kind === 'ranges' ? '/marker_ranges/result' :
                 kind === 'camera' ? '/marker_pan_tracker/state' :
-                kind === 'triangulation' ? '/marker_triangulation/result' : `/football_field/${kind}`;
+                kind === 'triangulation' ? '/marker_triangulation/result' :
+                kind === 'avoidance' ? '/obstacle_avoidance_adv/status' : `/football_field/${kind}`;
             const topic = new ROSLIB.Topic({ros: rosbridge.ros, name,
                 messageType: 'std_msgs/msg/String', compression: rosbridge.compression,
                 queue_length: 1});
@@ -76,6 +114,7 @@ export class FieldClient {
                     if (kind === 'ranges') this.lastRanges = performance.now();
                     if (kind === 'camera') this.lastCamera = performance.now();
                     if (kind === 'triangulation') this.lastTriangulation = performance.now();
+                    if (kind === 'avoidance') this.lastAvoidance = performance.now();
                     for (const listener of this.listeners) listener();
                 } catch (error) { console.warn('Football field message:', error); }
             });
@@ -83,6 +122,10 @@ export class FieldClient {
         });
     }
     get connected() { return this.lastState > 0 && performance.now() - this.lastState < 2500; }
+    get goalVisual() {
+        return avoidanceGoalVisual(this.avoidance, (performance.now()-this.lastAvoidance)/1000,
+            this.layout?.frame_id);
+    }
     get triangulationVisual() {
         return triangulationVisual(this.triangulation, (performance.now()-this.lastTriangulation)/1000,
             this.state?.revision, this.layout?.frame_id);

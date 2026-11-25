@@ -72,8 +72,9 @@ Vizanti after building; existing saved dashboards receive the new widget.
 
 Advanced avoidance is available as an opt-in package. See the
 [controller guide](src/obstacle_avoidance_adv/README.md) for preview/motor modes,
-start/stop services, configuration and validation limits. It follows an 8 m
-mission route, stops before an obstacle, makes two gyro-controlled 90 degree
+start/stop services, configuration and validation limits. Select a curling field
+target with `target_run:=1` through `target_run:=5`; the default `target_run:=0`
+retains the forward-distance mission. It stops before an obstacle, makes two gyro-controlled 90 degree
 turns around a sidestep, passes 1 m, then drives diagonally to the original goal.
 `avoidance:=true` starts it in IDLE with
 private preview commands; `avoidance_drive:=true` explicitly selects motor output.

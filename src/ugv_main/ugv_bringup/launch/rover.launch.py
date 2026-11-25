@@ -31,6 +31,8 @@ def generate_launch_description():
                               description='Launch advanced obstacle avoidance; stays IDLE until start service'),
         DeclareLaunchArgument('avoidance_drive', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('goal_distance', default_value='8.0'),
+        DeclareLaunchArgument('target_run', default_value='0', choices=['0','1','2','3','4','5'],
+                              description='Avoidance curling target 1..5; 0 uses goal_distance'),
         DeclareLaunchArgument('lidar_crop', default_value=PythonExpression([
             "'false' if '", LaunchConfiguration('avoidance'), "'.lower() == 'true' else 'true'"])),
         DeclareLaunchArgument('base', default_value='true',
@@ -120,6 +122,7 @@ def generate_launch_description():
         include('polar_hist', 'histogram.launch.py', 'polar_hist'),
         include('obstacle_avoidance_adv', 'avoidance.launch.py', 'avoidance',
                 drive=LaunchConfiguration('avoidance_drive'),
+                target_run=LaunchConfiguration('target_run'),
                 goal_distance=LaunchConfiguration('goal_distance')),
         include('detection_improved', 'detection.launch.py', 'improved_detection',
                 camera=LaunchConfiguration('obstacle_camera'),
