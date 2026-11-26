@@ -20,15 +20,11 @@ def motion_intent(controller, pose, command, waiting_reason=''):
     if state in ('APPROACH', 'REJOIN'):
         delta = controller.goal - pose[:2]
         heading, remaining = math.atan2(delta[1], delta[0]), float(np.linalg.norm(delta))
-    elif state in ('TURN_OUT', 'TURN_FORWARD', 'GAP_ALIGN', 'LOOK'):
+    elif state in ('TURN_OUT', 'GAP_ALIGN', 'LOOK'):
         heading = controller.turn_heading
     elif state == 'SIDESTEP':
         heading = controller.turn_heading
         remaining = controller.side_length - float((pose[:2] - controller.leg_start) @
-                    np.array([math.cos(heading), math.sin(heading)]))
-    elif state == 'PASS':
-        heading = controller.leg_heading
-        remaining = controller.cfg.pass_distance - float((pose[:2] - controller.leg_start) @
                     np.array([math.cos(heading), math.sin(heading)]))
     elif state == 'GAP':
         delta = controller.gap_entry - pose[:2]

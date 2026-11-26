@@ -58,14 +58,16 @@ def test_recovers_from_two_new_accepted_ids_and_lower_uncertainty(recovery):
     update(.4, distance=.04, position_std=.19, heading_std=6., age=.1,
            stamps={'family:5': start-1., 'family:1': start+.15})
     assert node.controller.state == 'RELOCALIZE' and node.arrival is None
-    assert commands == [(0., 0.), (0., 0.)]
+    assert commands and all(command == (0., 0.) for command in commands)
     # A second ID alone is insufficient if the estimate is still uncertain.
     stamps = {'family:1': start+.15, 'family:2': start+.55}
     update(.4, age=.1, stamps=stamps)
     assert node.controller.state == 'RELOCALIZE'
     update(.4, position_std=.19, heading_std=6., age=.2, stamps=stamps)
+    assert node.controller.state == 'RELOCALIZE'
+    update(6.81, position_std=.19, heading_std=6., age=.2, stamps=stamps)
     assert node.controller.state == 'APPROACH'
-    assert node.relocalization_result['outcome'] == 'recovered'
+    assert node.relocalization_result['outcome'] == 'timeout'
     assert node.relocalization_result['accepted_tags'] == ['family:1', 'family:2']
     assert requests[-1] == {'deadline_s': 0}
     assert all(command == (0., 0.) for command in commands)
@@ -87,24 +89,51 @@ def test_eight_second_timeout_resumes_once_through_the_motion_limiter(recovery):
     assert len(requests) == 2
 
 
-@pytest.mark.parametrize('state, distance', [('PASS', .7), ('APPROACH', 1.51)])
+@pytest.mark.parametrize('state, distance', [('REPLAN', .7), ('APPROACH', 1.01)])
 def test_eligibility_limits_the_pause_to_final_approach(recovery, state, distance):
     node, update, requests, _ = recovery
-    if state == 'PASS':
-        node.controller.leg_start = np.asarray(node.pose[:2]).copy()
     node.controller.change(state, time.monotonic(), 'driving')
     update(distance=distance)
     assert node.relocalization is None and not requests
 
 
-@pytest.mark.parametrize('second_tag_age, expected', [(2., True), (1., False)])
-def test_recent_single_tag_can_trigger_search_earlier(recovery, second_tag_age, expected):
+def test_low_uncertainty_and_two_recent_tags_still_trigger_search(recovery):
     node, update, requests, _ = recovery
     now = node.now()
-    update(distance=1.4, position_std=.22, heading_std=6., age=.1,
-           stamps={'family:5': now-.1, 'family:2': now-second_tag_age})
-    assert (node.controller.state == 'RELOCALIZE') == expected
-    assert bool(requests) == expected
+    update(distance=.9, position_std=.1, heading_std=3., age=.1,
+           stamps={'family:5': now-.1, 'family:2': now-.2})
+    assert node.controller.state == 'RELOCALIZE'
+    assert requests
+
+
+def test_arrival_waits_for_full_search(recovery):
+    node, update, requests, _ = recovery
+    update(distance=.04, position_std=.1, heading_std=3.)
+    assert node.controller.state == 'RELOCALIZE'
+    assert node.arrival is None
+    update(8.01, distance=.04, position_std=.1, heading_std=3.)
+    assert node.controller.state == 'DONE'
+    assert len(requests) == 2
+
+
+def test_arrival_after_approach_search_does_not_start_another_search(recovery):
+    node, update, requests, _ = recovery
+    update(distance=.7)
+    update(8.01, distance=.7)
+    update(.1, distance=.04)
+    assert node.controller.state == 'DONE'
+    assert len(requests) == 2
+
+
+def test_replan_completes_before_final_search_even_at_goal(recovery):
+    node, update, _, _ = recovery
+    node.controller.change('REPLAN', time.monotonic(), 'replanning')
+    update(distance=.04)
+    assert node.controller.state == 'REPLAN'
+    update(.3, distance=.04)
+    assert node.controller.state == 'REJOIN'
+    update(.1, distance=.04)
+    assert node.controller.state == 'RELOCALIZE'
 
 
 def test_operator_stop_cancels_the_camera_lease_without_resuming(recovery):
@@ -114,4 +143,20 @@ def test_operator_stop_cancels_the_camera_lease_without_resuming(recovery):
     assert node.controller.state == 'IDLE'
     assert node.relocalization_result['outcome'] == 'operator_stop'
     assert requests[-1] == {'deadline_s': 0}
+    assert commands[-1] == (0., 0.)
+
+
+def test_close_obstacle_does_not_prevent_camera_search_and_is_checked_on_resume(recovery, monkeypatch):
+    node, update, requests, commands = recovery
+    from l2s3_curling.planner import View
+    from test_curling_gap import SeenEverywhere
+    observed = SeenEverywhere()
+    observed.points = np.array([node.pose[:2] + [.32, 0.]])
+    obstacle = View([observed], node.pose, node.controller.cfg, 0.)
+    monkeypatch.setattr(node, 'prepare', lambda: obstacle)
+    update()
+    assert node.controller.state == 'RELOCALIZE'
+    assert requests and commands[-1] == (0., 0.)
+    update(8.01)
+    assert node.controller.state == 'STOP'
     assert commands[-1] == (0., 0.)

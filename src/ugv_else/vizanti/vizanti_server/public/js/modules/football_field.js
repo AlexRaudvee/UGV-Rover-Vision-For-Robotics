@@ -126,6 +126,11 @@ export function controllerStatusVisual(status, ageSeconds) {
     const hold = active && status.readiness !== 'Ready';
     const waiting = active && !hold && /^Waiting/.test(status.motion_status || '');
     const nav = status.navigation || {}, goal = status.goal || {};
+    const ekf = status.ekf;
+    const uncertainty = ekf?.valid && ekf?.fresh && Number.isFinite(ekf.sigma_position_m) &&
+        Number.isFinite(ekf.sigma_heading_deg) ?
+        `FUSED uncertainty (1σ): ${ekf.sigma_position_m.toFixed(2)} m · ${ekf.sigma_heading_deg.toFixed(1)}°` :
+        'FUSED uncertainty: unavailable';
     const run = Number.isInteger(goal.target_run) ? goal.target_run : nav.target_run;
     const name = goal.target_name || nav.target_name || '';
     const distance = nav.ready && Number.isFinite(nav.distance_to_goal_m) ? ` · ${nav.distance_to_goal_m.toFixed(2)} m to goal` : '';
@@ -136,6 +141,7 @@ export function controllerStatusVisual(status, ageSeconds) {
         reason: hold ? status.readiness : waiting ? status.motion_status :
             status.state === 'IDLE' && status.readiness !== 'Ready' ? status.readiness || 'Waiting for inputs' : status.reason || '',
         warning: status.ekf_warning || (status.ekf?.fresh ? status.ekf.uncertainty_reason : '') || '',
+        uncertainty,
         comparison:''};
 }
 
@@ -148,6 +154,7 @@ export function updateControllerPanel(element, status, motion) {
     text('controller_summary',status.summary);
     text('controller_reason',status.reason);
     text('controller_warning',status.warning ? `Warning: ${status.warning}` : '');
+    text('controller_uncertainty',status.uncertainty || 'FUSED uncertainty: unavailable');
     text('controller_comparison',comparison ?
         `LOCAL ↔ EKF (matched): ${comparison.distance_m.toFixed(2)} m · ${comparison.heading_deg.toFixed(1)}°` :
         'LOCAL ↔ EKF: comparison unavailable');
@@ -168,11 +175,13 @@ export function drawMotionOverlay(ctx, motion, project) {
     };
     ctx.save();
     const fused = motion.fused ? point(motion.fused) : null;
+    // Show the direct bearing in every controller state while pose and goal are fresh.
+    // This is a reference line; the orange arrow is the actual commanded motion.
     if (fused && motion.goal) {
         const goal = point(motion.goal.position);
-        segment(fused,goal,'#ffe16a',true);
-        if (goal && motion.distance !== null) label(`${motion.distance.toFixed(2)} m to goal`,
-            [(fused[0]+goal[0])/2,(fused[1]+goal[1])/2],'#ffe16a');
+        segment(fused, goal, '#b79aff', true);
+        if (goal) label('DIRECT TO GOAL',
+            [(fused[0] + goal[0]) / 2, (fused[1] + goal[1]) / 2], '#b79aff');
     }
     if (motion.local) {
         const p=point(motion.local), h=motion.local[2];
@@ -291,6 +300,10 @@ export class FieldClient {
             searching_without_markers: 'sweeping for tags',
             searching_with_one_marker: 'searching for a second tag',
             relocalizing_toward_last_tag: 'looking toward the last accepted tag',
+            relocalize_last_tag: 'looking toward the last accepted tag',
+            relocalize_hold: 'holding on visible tags',
+            relocalize_search: 'searching for another tag',
+            relocalize_sweep: 'sweeping for tags',
             manual: 'manual control',
         };
         return `Camera view (estimated) ${this.camera.horizontal_fov_deg.toFixed(0)}° · ` +

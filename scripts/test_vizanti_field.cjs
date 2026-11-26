@@ -9,7 +9,7 @@ let frame, now=1000;
 const ctx=new Proxy({}, {get:(_,name)=> (...args)=>drawn.push([name,...args])});
 for(const name of ['canvas','status','fit','save_start','apply_start','config_file','start_status','markers_status',
                   'start_x_m','start_y_m','start_heading_deg','controller_panel','controller_state',
-                  'controller_summary','controller_reason','controller_warning','controller_comparison']) {
+                  'controller_summary','controller_reason','controller_warning','controller_uncertainty','controller_comparison']) {
     elements[`{uniqueID}_${name}`]={isConnected:true,value:'',style:{},dataset:{fieldKey:name},
         addEventListener(event,cb){this[event]=cb;},getContext:()=>ctx};
     let value='';
@@ -116,7 +116,7 @@ async function main(){
     listeners['/curling_controller/status']({data:JSON.stringify({state:'IDLE',goal:{
         ...avoidance.goal,target_run:5,target_name:'Penalty area corner left',position_m:[2.85,-2]}})});
     const motion={frame_id:'map',session_id:'field-test',revision:2,state:'SIDESTEP',
-        readiness:'Ready',ekf_warning:'EKF position uncertainty 0.90 m exceeds limit 0.80 m',
+        readiness:'Ready',ekf:{valid:true,fresh:true,sigma_position_m:.23,sigma_heading_deg:8.4},ekf_warning:'EKF position uncertainty 0.90 m exceeds limit 0.80 m',
         reason:'Following committed sidestep',motion_status:'Moving with bounded acceleration',
         navigation:{ready:true,distance_to_goal_m:5.4},goal:{...avoidance.goal,target_run:5,
             target_name:'Penalty area corner left',position_m:[2.85,-2]},
@@ -132,8 +132,10 @@ async function main(){
     assert(!drawn.some(d=>d[0]==='fillText' && d[1].startsWith('RUN 1')),'previous goal remained drawn');
     assert(drawn.some(d=>d[0]==='fillText' && d[1]==='LOCAL (-2.20, 0.00)'),
         'local wheel/gyro marker missing');
-    assert(drawn.some(d=>d[0]==='lineTo' && d[1]===642.5 && d[2]===500),
-        'reference line did not reach the selected field goal');
+    assert(!drawn.some(d=>d[0]==='lineTo' && d[1]===642.5 && d[2]===500),
+        'removed goal reference line was drawn');
+    assert.match(elements['{uniqueID}_controller_uncertainty'].textContent,/0.23 m · 8.4°/);
+    assert.match(mocks.controllerStatusVisual({...motion,ekf:{valid:true,fresh:false}},0).uncertainty,/unavailable/);
     assert(drawn.some(d=>d[0]==='fillText' && d[1]==='SIDESTEP · 0.40 m remaining'),
         'current motion intent missing');
     assert.equal(elements['{uniqueID}_controller_state'].textContent,'SIDESTEP');

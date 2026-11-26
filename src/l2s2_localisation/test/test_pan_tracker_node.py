@@ -136,6 +136,21 @@ def test_bad_decoder_quality_is_treated_as_missing(tracker):
     assert 2 not in node.control.tracks and 3 in node.control.tracks
 
 
+def test_relocalization_uses_faster_pan_and_returns_to_normal_speed(tracker):
+    node = tracker
+    node.on_head(head(node))
+    now = node.get_clock().now().nanoseconds/1e9
+    node.on_relocalize(String(data=json.dumps({'deadline_s': now+7.9, 'marker_id': None})))
+    node.last_tick = time.monotonic() - .1
+    node.tick()
+    assert node.control.pan == pytest.approx(1.2, abs=.02)
+    node.on_relocalize(String(data='{"deadline_s":0}'))
+    before = node.control.pan
+    node.last_tick = time.monotonic() - .1
+    node.tick()
+    assert abs(node.control.pan-before) == pytest.approx(.8, abs=.02)
+
+
 def test_node_tracks_any_visible_subset_and_publishes_the_ids(tracker):
     node = tracker
     node.on_head(head(node))

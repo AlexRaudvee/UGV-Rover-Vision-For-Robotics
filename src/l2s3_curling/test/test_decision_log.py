@@ -25,7 +25,7 @@ def image(stamp, data):
     return msg
 
 
-@pytest.mark.parametrize('source', ['lidar_current', 'lidar_history', 'stereo_depth'])
+@pytest.mark.parametrize('source', ['lidar_current', 'lidar_history'])
 def test_stop_records_the_actual_blocking_source_and_nearby_images(observer, tmp_path, monkeypatch, source):
     node = observer
     navigation_setup(node, (-3.2, 0., 0.), (0., 0., 0.))
@@ -33,20 +33,17 @@ def test_stop_records_the_actual_blocking_source_and_nearby_images(observer, tmp
     cfg = node.controller.cfg
     historical = [[.34, 0.]] if source == 'lidar_history' else [[.70, 0.]]
     current = [[.34, 0.]] if source == 'lidar_current' else [[.80, 0.]]
-    depth = [[.34, 0.]] if source == 'stereo_depth' else []
     view = View([scan(historical, stamp-.20), scan(current, stamp-.06)], node.pose,
-                depth, cfg, .06, depth_stamp=stamp-.35)
+                cfg, .06)
     monkeypatch.setattr(node, 'prepare', lambda: view)
     monkeypatch.setattr(node, 'send', lambda v, w: None)
     warnings = []
     log = DecisionLog(tmp_path, warnings.append)
     node.decision_log = log
-    expected_frame = b'frame at observation' if source == 'stereo_depth' else b'frame near decision'
+    expected_frame = b'frame near decision'
     try:
         log.on_image('oak_color', image(stamp-.35, b'frame at observation'))
         log.on_image('oak_color', image(stamp-.05, b'frame near decision'))
-        log.on_image('stereo_depth', image(stamp-.30, b'depth preview'))
-        log.on_image('depth_detection', image(stamp-5, b'old annotation'))
         node.tick()
         # Repeating a hold in the same state should not create more snapshots.
         node.log_decision('STOP', node.controller.decision, node.now())
@@ -64,16 +61,15 @@ def test_stop_records_the_actual_blocking_source_and_nearby_images(observer, tmp
     assert point['source'] == source
     assert point['age_s'] == pytest.approx(event['stamp_s']-point['stamp_s'])
     assert (log.directory / event['images']['oak_color']['path']).read_bytes() == expected_frame
-    assert event['images']['stereo_depth']['path']
-    assert event['images']['depth_detection']['path'] is None
+    assert set(event['images']) == {'oak_color'}
 
 
-def test_camera_falls_back_to_decision_time_when_detection_frame_is_gone(tmp_path):
+def test_camera_uses_frame_near_decision_time(tmp_path):
     warnings = []
     log = DecisionLog(tmp_path, warnings.append)
     try:
         log.on_image('oak_color', image(99.9, b'frame near decision'))
-        log.enqueue(dict(kind='stop', stamp_s=100.), depth_stamp=98.)
+        log.enqueue(dict(kind='stop', stamp_s=100.))
     finally:
         log.close()
     event = json.loads((log.directory / 'decisions.jsonl').read_text())
@@ -86,14 +82,14 @@ def test_gap_records_both_sides_and_the_selected_candidate():
     controller = Controller(cfg)
     pose = np.array([.1, 0., 0.])
     controller.start(pose, 0.)
-    view = View([scan(box(1.8, 0.), 99.8)], pose, box(1.8, .85), cfg, .1, 99.9)
+    view = View([scan(np.vstack([box(1.8, 0.), box(1.8, .85)]), 99.8)], pose, cfg, .1)
     controller.step(pose, view, .1)
     record = controller.decision
     assert record['kind'] == 'gap'
     assert record['threshold_m'] == cfg.gap_lookahead
     gap = record['options']['gap']
     assert gap['selected_offset_m'] in gap['viable_offsets_m']
-    assert {p['source'] for p in gap['left_points']} == {'stereo_depth'}
+    assert {p['source'] for p in gap['left_points']} == {'lidar_current'}
     assert {p['source'] for p in gap['right_points']} == {'lidar_current'}
 
 
@@ -102,7 +98,7 @@ def test_emergency_stop_and_reverse_report_the_same_clearance_check():
     controller = Controller(cfg)
     pose = np.zeros(3)
     controller.start(pose, 0.)
-    view = View([scan([[.17, 0.]], 99.9)], pose, [], cfg, .1)
+    view = View([scan([[.17, 0.]], 99.9)], pose, cfg, .1)
     assert controller.step(pose, view, .1) == (0., 0.)
     assert controller.decision['kind'] == 'backoff_stop'
     assert controller.step(pose, view, 1.2)[0] < 0.
@@ -116,7 +112,7 @@ def test_sidestep_records_why_the_other_side_was_rejected():
     controller = Controller(cfg)
     pose = np.zeros(3)
     controller.start(pose, 0.)
-    view = View([scan([[.34, 0.]], 99.9)], pose, [[0., -.31]], cfg, .1, 99.8)
+    view = View([scan([[.34, 0.], [0., -.31]], 99.9)], pose, cfg, .1)
     for now in (.1, .2, .6):
         controller.step(pose, view, now)
     record = controller.decision
@@ -124,4 +120,4 @@ def test_sidestep_records_why_the_other_side_was_rejected():
     assert record['options']['selected_side'] == 'left'
     right = record['options']['sides']['right']
     assert right['rejected_by'] == 'obstacle'
-    assert right['points'][0]['source'] == 'stereo_depth'
+    assert right['points'][0]['source'] == 'lidar_current'

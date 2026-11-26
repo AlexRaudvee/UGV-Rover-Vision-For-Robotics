@@ -10,7 +10,7 @@ This package contains the curling controller and the separate path preview.
 - `test/test_path_plan.py`: target coordinates and planner behaviour tests.
 
 The path preview displays a route. The curling controller drives toward a fixed
-field target using the marker EKF, avoids obstacles, and records decisions. The
+field target using the marker EKF, avoids obstacles using LiDAR alone, and records decisions. The
 shared detection, triangulation, pan tracking and EKF live in the Session 1/2 packages.
 
 After rebuilding, select the curling target from the host with

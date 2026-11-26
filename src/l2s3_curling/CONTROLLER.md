@@ -8,16 +8,31 @@ never starts a mission. Call the start service explicitly.
 
 1. APPROACH the original endpoint, with a 1.3 m/s cruise ceiling. Actual speed is
    capped by measured obstacle clearance, scan age and braking distance.
-2. STOP approximately 30 cm before the obstacle, measured from the front bumper.
-3. Choose the shorter clear sidestep; prefer right when costs differ by at most
-   5 cm. Commit to that side, then TURN_OUT 90 degrees using gyro feedback.
-4. SIDESTEP by the observed obstacle edge plus chassis width/margin, at least
-   0.5 m and at most 1.2 m. Do not continuously resize the manoeuvre from noise.
-5. TURN_FORWARD 90 degrees back to the approach heading.
-6. PASS 1 m forward, provided the corridor is clear. A new obstacle starts
-   another stop/bypass sequence.
-7. REJOIN by driving diagonally to the original endpoint. There is no intermediate
-   sideways return to the original line. Stop within 8 cm of the estimated goal.
+2. STOP at the configured bumper clearance (currently 5 cm) before the obstacle.
+3. Search both sides in one-degree steps for a clear diagonal that reaches the
+   required lateral offset. Add `bypass_angle_margin_deg` (default 5 degrees),
+   recheck the resulting corridor and stopping space, and choose the smaller
+   angle (prefer right within one degree). TURN_OUT using gyro feedback.
+4. SIDESTEP along that diagonal to the observed obstacle edge plus chassis
+   width/margin, with lateral offset limited to 0.5–1.0 m. The diagonal is
+   rejected if its forward progress would pass the goal. Each new LiDAR scan
+   checks whether the rover can turn and safely rejoin the goal route; if clear
+   for 0.2 s, the sidestep stops early. The planned distance remains a limit.
+5. REPLAN from the new position after the diagonal or an early exit. If the
+   turn and next metre toward the goal (or the whole remaining distance) are
+   visibly clear for 0.2 s while stopped, enter REJOIN. Otherwise stop and
+   choose another avoidance move.
+   If no goal-bounded move fits within 1 m of the goal, hold for a fresh scan.
+6. REJOIN by steering directly to the fixed goal. Obstacle checks stop at the
+   goal footprint; obstacles farther beyond it do not trigger a bypass. Stop
+   within 8 cm of the estimated goal.
+
+Within 1 m of the goal, a blocker seen by the current LiDAR scan within 35 cm
+of the goal may occupy the target. The rover can end a sidestep when the route
+to a point 10 cm before that blocker is clear, even if the full route to the
+goal is blocked. It approaches at avoidance speed and latches GOAL_OCCUPIED
+after settling at that bumper clearance. DONE still requires the usual 8 cm
+goal tolerance.
 
 ### Gap between two obstacles
 
@@ -79,7 +94,7 @@ instead. It FAULTs only when it has backed up the full 0.30 m with nothing behin
 something is still within 8 cm ahead: that moves with the rover, such as a cable in
 front of the LiDAR (runs 10d, 10f and 10g waited for good before these changes).
 
-A sidestep blocked for 5 s turns back to the route and re-plans from PASS
+A sidestep blocked for 5 s stops and enters REPLAN
 (run 10b waited 68 s here until the mission timeout).
 
 Turns finish within the configured 0.04 rad tolerance, followed by a short settle;
@@ -93,12 +108,12 @@ physical braking and slip have not been measured. A short approach need not reac
 
 ## Inputs
 
-- `/scan`: primary obstacle/clearance source. Chassis reflections are removed;
+- `/scan`: sole obstacle/clearance source. Chassis reflections are removed;
   adjacent returns support obstacles, and isolated returns must repeat. The last
   0.3 s of scan observations bridge brief missing rays. Broad unobserved forward
   sectors cause a wait; NaNs are not converted to free space.
 - `/imu/estimation`: physical gyro transformed into the base frame. Quiet readings
-  estimate bias while idle. Integrated gyro angle closes the 90 degree turns.
+  estimate bias while idle. Integrated gyro angle closes turns.
 - `odom_topic` (now `/odom/wheels`): **forward velocity**, integrated along gyro
   heading for mission distance and diagonal steering. Global EKF pose/yaw jumps and
   lateral velocity do not change the mission position. In run 10c on turf, the
@@ -109,9 +124,6 @@ physical braking and slip have not been measured. A short approach need not reac
 - `/odom/wheels`: zero-motion detection and fallback if fused forward velocity
   disagrees strongly with wheel feedback. Existing wheel scaling is retained;
   no new wheel calibration is introduced.
-- `/detection_improved/obstacle/detections`: optional WLS depth obstacle outlines.
-  Delayed measurements are compensated using mission pose history. NaN/missing
-  depth, no detections, or unavailable camera TF do not block LiDAR navigation.
 - `/marker_ekf/pose`: required field-frame pose for goal direction, remaining
   distance and arrival in every active state. Wheel/gyro integration still supplies
   continuous coordinates for obstacle history and physical bypass distances.
@@ -122,8 +134,9 @@ physical braking and slip have not been measured. A short approach need not reac
 
 LiDAR, gyro and forward odometry have a 1.5 s acquisition and receipt timeout.
 The EKF and its last timestamp-matched alignment have a 1 s timeout, and field
-metadata must have been received within 1.5 s. Brief failures hold motion; five seconds of input loss
-latches a fault. Another publisher on the selected command topic also faults.
+metadata must have been received within 1.5 s. Missing or stale LiDAR holds the
+rover until scans return. Other input failures hold motion and latch a fault after
+five seconds. Another publisher on the selected command topic also faults.
 A blocked corridor waits for clearance instead of assuming it is free.
 
 There is no cube face/size registration or persistent costmap. Global goal
@@ -131,10 +144,10 @@ guidance uses the external marker EKF; `/static_obstacle_localizer/status` and
 `/obstacle_anchor/pose` are no longer used. Local mission odometry still accumulates
 distance and gyro errors, while accepted marker corrections adjust goal guidance.
 This does not provide drift-free localization or a physical success guarantee.
-The LiDAR plane can miss obstacles above/below it when depth is unavailable.
+The LiDAR plane can miss obstacles above or below it.
 
-All settings are in `config/controller.yaml`. The footprint defaults to 0.26 m
-long by 0.30 m wide, plus an 8 cm side margin; include any attachments when changing
+All settings are in `config/controller.yaml`. The configured footprint is 0.25 m
+long by 0.22 m wide, plus a 6 cm side margin; include any attachments when changing
 these values. In-place turns check measured obstacles against the circumscribed
 footprint. Missing rear rays do not prove rear clearance; initial turns need space
 around the rover. Reverse movement is used only for the back-up described above (at most 0.30 m).
@@ -155,13 +168,13 @@ scan history, committed bypass targets, turn headings or manoeuvre progress.
 
 Arrival uses the published FUSED x/y position directly, without subsequent local
 projection. In every active state, a distance at or below `goal_tolerance_m`
-(default 0.08 m) immediately sends zero velocity and latches DONE. This check
+(default 0.08 m) sends zero velocity and latches DONE once the final-approach
+relocalization has completed. This check
 precedes scan readiness, timestamp matching and all obstacle manoeuvres, including
 back-up. The FUSED pose must still be valid, fresh and use the mission's
 unchanged field reference. Visible markers and a final
 heading are not required: the EKF continues predicting from odometry without tags.
-`navigation.distance_to_goal_m` and the yellow Vizanti line use this raw FUSED
-distance; `projected_distance_to_goal_m` separately reports the steering estimate.
+`navigation.distance_to_goal_m` uses this raw FUSED distance; `projected_distance_to_goal_m` separately reports the steering estimate.
 An INFO completion log records the previous state, FUSED position, goal and
 distance. The status `arrival` object retains this evidence until the next run.
 
@@ -185,22 +198,20 @@ motion and qualify for arrival even above either warning threshold. The arrival
 record and completion log include the EKF uncertainty at the stop. The 8 cm
 goal radius applies to the estimated position.
 
-On a clear final approach (`APPROACH` or `REJOIN`), the rover can make one
-`RELOCALIZE` attempt per run. The defaults require a goal distance of at most
-1.5 m, position standard deviation above 0.20 m or heading standard deviation
-above 8 degrees, and fewer than two distinct tags accepted in the last 1.5 seconds.
-The chassis stays stationary while the pan tracker looks toward a recent
-bearing for the last accepted tag or sweeps normally. The camera keeps its
-configured speed limit and the search expires after at most 8 seconds.
+Once per mission, the rover enters `RELOCALIZE` within 1.0 m of the FUSED goal
+from APPROACH or REJOIN, after any committed obstacle manoeuvre. The chassis
+stops for the full eight seconds while the pan camera holds on visible markers
+and searches toward other mapped markers. The search completes before declaring
+arrival, including when a correction places the rover inside the goal radius.
+The EKF continues to accept observations throughout.
+The camera pans at up to 12 degrees/second during this search; normal tracking
+uses 8 degrees/second.
 
-The rover resumes early after two distinct tags from new images have been
-accepted and both uncertainty values are back within the recovery limits.
-On timeout it uses the latest fresh, valid FUSED pose and the normal clearance
-and motion checks. While searching, an isolated correction inside the 8 cm
-arrival radius waits for the search to finish before it can end the mission.
-Missing or stale input still holds motion. Vizanti displays the state and
-countdown. The launch log records the reason, accepted tags, pose and
-uncertainty before and after, and outcome.
+After the search, the controller declares arrival only if the latest fresh
+FUSED pose remains within tolerance; otherwise it resumes navigation and can
+finish when it reaches the goal again without another search. If required inputs
+are unavailable it holds. The launch log
+records camera actions, accepted marker IDs and before/after pose and uncertainty.
 
 For `ekf.comparison`, the controller captures the assumed start supplied by
 `/football_field/state` when its existing start service is called. A zero starting
@@ -233,10 +244,10 @@ After starting a mission, obstacle-related stops, reverse attempts, sidestep
 selections and gap choices are saved under `run_logs/avoidance_decisions/`.
 Each mission gets a timestamped directory with a `decisions.jsonl` timeline.
 The launch log gives the path of each snapshot. Each event directory contains
-`decision.json` and any matching OAK-D color, colorized stereo depth and depth
-detector annotation frames. Image timestamps and ages are recorded. For a decision
-involving stereo points, frame selection prefers their acquisition time and
-falls back to the decision time. A missing image does not prevent the event log.
+`decision.json` and any matching OAK-D color frame. Images are diagnostic
+snapshots only; obstacle decisions use LiDAR points exclusively. Image timestamps
+and ages are recorded.
+A missing image does not prevent the event log.
 
 The record includes the state change, measured clearance and applied threshold,
 the relevant points in rover coordinates and their source and acquisition age.
@@ -259,9 +270,8 @@ The diagnostic geometry comes from `/curling_controller/visualization` at
   corrections never reposition its origin. A dashed cyan line connects it to
   the contemporaneous corrected pose. The numeric disagreement uses acquisition-
   matched samples, not the distance between asynchronous browser updates.
-- **Dashed yellow line to the duck:** the direct goal reference and distance,
-  not a collision-free route. It remains visible during bypasses when pose data
-  is fresh.
+- **FUSED uncertainty:** the panel shows position and heading standard deviations
+  while the pose is fresh, and reports unavailable otherwise.
 - **Orange action:** an arrow for at most two seconds / 0.6 m of the sent drive
   or reverse command, including curved motion; a rotation arrow for an in-place
   turn, labelled with remaining angle; or a stop indicator during a hold/wait.

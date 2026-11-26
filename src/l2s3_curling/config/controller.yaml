@@ -3,17 +3,22 @@ curling_controller:
     target_run: 0                 # 1..5: fixed curling target; 0: legacy goal_distance mission.
     decision_log_dir: run_logs/avoidance_decisions  # Relative to the rover workspace at launch.
     goal_distance: 5.0
-    speed: 0.2                    # Cruise ceiling in m/s; braking and coverage can reduce the command.
+    speed: 0.5                    # Cruise ceiling in m/s; braking and coverage can reduce the command.
     avoidance_speed: 0.2
     angular_speed: 0.8
     half_length: 0.125             # Chassis footprint, metres, including tyres.
     half_width: 0.11
     side_margin: 0.06
-    stop_clearance: 0.30          # Front bumper to obstacle.
-    emergency_clearance: 0.08
+    stop_clearance: 0.05          # Front bumper to obstacle.
+    emergency_clearance: 0.03
     sidestep_min: 0.50
-    sidestep_max: 1.20
-    pass_distance: 1.0            # Forward after the second 90 degree turn.
+    sidestep_max: 1.00
+    bypass_angle_margin_deg: 5.0  # Extra angle beyond the first clear diagonal.
+    bypass_max_distance: 2.20     # Maximum length of a diagonal; goal progress caps it further.
+    rejoin_check_distance: 1.0    # Check this far toward the goal, or up to the goal.
+    rejoin_clear_time: 0.2        # Turn and corridor must remain clear for this long.
+    occupied_goal_radius_m: 0.35  # A route blocker this close to the goal counts as occupying it.
+    occupied_goal_clearance_m: 0.10 # Stop this far before an occupied goal, measured from the front bumper.
     braking_deceleration: 0.5     # Command ramp assumption, not measured physical braking.
     linear_acceleration: 0.5
     angular_acceleration: 1.2
@@ -33,7 +38,6 @@ curling_controller:
     obstacle_length: 0.50         # Longest obstacle the drive through must clear.
     gap_margin: 0.02              # Room each side in a gap; smallest gap 2 * (half_width + gap_margin) = 0.26 m.
     input_timeout: 1.5            # LiDAR, gyro and odometry age/receipt allowance.
-    depth_timeout: 3.0            # Optional delayed WLS detections; compensated by pose history.
     scan_memory_s: 0.30
     control_rate: 20.0
     resume_clear_time: 0.2
@@ -46,13 +50,12 @@ curling_controller:
     # Standard-deviation thresholds for advisory warnings.
     max_position_std_m: 0.80     # Largest position standard deviation in any horizontal direction.
     max_heading_std_deg: 30.0
-    # One camera-only relocalization attempt on the final approach per mission.
-    relocalize_distance_m: 1.5
+    # One camera-only relocalization on the final approach.
+    relocalize_distance_m: 1.0
     relocalize_position_std_m: 0.20
     relocalize_heading_std_deg: 8.0
     relocalize_marker_age_s: 1.5  # Look back for two distinct accepted tags.
     relocalize_duration_s: 8.0
     imu_topic: /imu/estimation
-    detection_topic: /detection_improved/obstacle/detections
     base_frame: base_footprint
     command_topic: /curling_controller/cmd_vel

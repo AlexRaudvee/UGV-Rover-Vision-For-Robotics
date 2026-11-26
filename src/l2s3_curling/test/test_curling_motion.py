@@ -2,6 +2,16 @@ import numpy as np
 import pytest
 
 from l2s3_curling.motion import MotionLimiter
+from l2s3_curling.planner import turn_direction_mismatch
+
+
+def test_turn_sign_fault_only_checks_consistent_in_place_turns():
+    assert turn_direction_mismatch((0., .5), (0., .5), -.2)
+    assert not turn_direction_mismatch((.2, .5), (.2, .5), -.2)  # curved drive
+    assert not turn_direction_mismatch((0., .5), (0., -.5), -.2)  # changing direction
+    assert not turn_direction_mismatch((0., .5), (0., 0.), -.2)  # stopping
+    assert not turn_direction_mismatch((0., .5), (0., .5), -.03)  # gyro noise
+    assert not turn_direction_mismatch((0., .5), (0., .5), .2)
 
 
 def test_flickering_clear_frames_do_not_cause_motion_pulses():

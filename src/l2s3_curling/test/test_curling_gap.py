@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from l2s3_curling.planner import Controller, Settings, View, rotation
+from l2s3_curling.planner import Controller, Scan, Settings, View, rotation
 
 
 class SeenEverywhere:
@@ -12,6 +12,9 @@ class SeenEverywhere:
     points = np.empty((0, 2))
 
     def observed(self, point):
+        return True
+
+    def visible_free(self, point):
         return True
 
 
@@ -26,7 +29,9 @@ def box(x, y, size=.30):
 
 
 def view(world, pose=(0., 0., 0.), cfg=None):
-    return View([SeenEverywhere()], np.array(pose), world, cfg or Settings(goal_distance=5.), 0.)
+    observed = SeenEverywhere()
+    observed.points = np.asarray(world).reshape(-1, 2)
+    return View([observed], np.array(pose), cfg or Settings(goal_distance=5.), 0.)
 
 
 def started(cfg):
@@ -115,16 +120,15 @@ def test_drives_directly_to_goal_when_gap_obstacles_are_beyond_it(state):
     assert controller.decision is None
 
 
-def test_still_chooses_gap_if_the_obstacle_limits_clearance_at_the_goal():
+def test_obstacle_beyond_goal_does_not_trigger_a_gap():
     cfg = Settings(goal_distance=5.)
     controller = started(cfg)
     controller.set_goal([.90, 0.])
     front = 1.08 + cfg.half_length + .15
     observed = view(np.vstack([box(front, 0.), box(front, .85)]), cfg=cfg)
 
-    assert controller.step(np.zeros(3), observed, .1) == (0., 0.)
-    assert controller.state == 'GAP'
-    assert controller.decision['threshold_m'] == pytest.approx(.90 + cfg.stop_clearance + cfg.distance_tolerance)
+    assert controller.step(np.zeros(3), observed, .1)[0] > 0.
+    assert controller.state == 'APPROACH'
 
 
 def test_controller_enters_gap_instead_of_stopping():
@@ -137,7 +141,7 @@ def test_controller_enters_gap_instead_of_stopping():
     assert c.gap_heading > 0
 
 
-def test_single_box_still_uses_the_quarter_turn_sidestep():
+def test_single_box_uses_a_clear_diagonal_bypass():
     cfg = Settings(goal_distance=5.)
     pose = np.array([1.8 - .15 - cfg.half_length - cfg.stop_clearance + .01, 0., 0.])
     c = started(cfg)
@@ -147,6 +151,44 @@ def test_single_box_still_uses_the_quarter_turn_sidestep():
     for t in (0.2, 0.5, 0.8):
         c.step(pose, view(world, pose), t)
     assert c.state == 'TURN_OUT'
+    angle = abs(c.turn_heading - c.leg_heading)
+    assert 0 < angle < math.pi / 2
+    assert c.side_length * math.sin(angle) == pytest.approx(view(world, pose).side_distance(c.side))
+    assert view(world, pose).segment_clear(c.turn_heading - pose[2], c.side_length + cfg.stop_clearance)
+
+
+def test_diagonal_cannot_pass_the_goal_plane():
+    cfg=Settings(goal_distance=5.)
+    world=box(.53,0.)
+    observed=view(world,cfg=cfg)
+    plan=observed.bypass(-1,0.,goal_distance=1.09)
+    assert plan is not None
+    angle,length=plan
+    assert length*math.cos(angle)<1.09-cfg.goal_tolerance_m
+    assert angle>math.radians(19)
+
+
+def test_no_goal_bounded_bypass_holds_near_goal():
+    cfg=Settings(goal_distance=5.,sidestep_max=.5)
+    c=started(cfg)
+    c.set_goal([.9,0.])
+    pose=np.zeros(3)
+    blocked=view(box(.53,0.,size=.60),pose,cfg)
+    c.step(pose,blocked,.1)
+    for now in (.2,.6,6.):c.step(pose,blocked,now)
+    assert c.state=='STOP'
+    assert 'goal-bounded' in c.reason
+
+
+def test_bypass_margin_increases_the_selected_angle():
+    pose = np.zeros(3)
+    world = box(.58, 0.)
+    small = Settings(goal_distance=5., bypass_angle_margin_deg=1.)
+    large = Settings(goal_distance=5., bypass_angle_margin_deg=8.)
+    a = view(world, pose, small).bypass(-1, 0.)
+    b = view(world, pose, large).bypass(-1, 0.)
+    assert a is not None and b is not None
+    assert b[0] - a[0] == pytest.approx(math.radians(7))
 
 
 def test_settled_stop_uses_direct_route_when_obstacle_clears():
@@ -194,7 +236,7 @@ def test_settled_stop_does_not_resume_on_an_unobserved_route_or_blocked_turn(lim
             def observed(self, point):
                 return point[0] != pytest.approx(1.)
 
-        observed = View([UnobservedMidpoint()], pose, [], cfg, 0.)
+        observed = View([UnobservedMidpoint()], pose, cfg, 0.)
     else:
         c.set_goal([0., 2.])
         observed = view(np.array([[-.22, 0.]]), cfg=cfg)
@@ -298,19 +340,103 @@ def test_gap_approach_never_waits_forever_just_short_of_the_entry():
     np.testing.assert_allclose(c.leg_start, c.gap_entry)     # centre line kept
 
 
-def test_blocked_sidestep_turns_back_to_replan_instead_of_waiting_for_the_timeout():
+def test_blocked_sidestep_replans_instead_of_waiting_for_the_timeout():
     # Run 10b: sidestepping right, something 0.29 m in front, waited 68 s until the timeout.
     cfg = Settings(**ROVER)
     c = started(cfg)
     c.state, c.leg_heading, c.turn_heading = 'SIDESTEP', 0., -math.pi / 2
     c.leg_start, c.side_length = np.zeros(2), .5
     pose = np.array([0., 0., -math.pi / 2])
-    blocker = box(0., -(cfg.half_length + .29 + .15))      # face 0.29 m in front of the bumper
+    blocker = np.vstack([box(0., -(cfg.half_length + .29 + .15)),
+                         box(.7, 0.)])  # Also block the route to the goal; no early rejoin.
     for t in np.arange(0., 4.9, .1):
         c.step(pose, view(blocker, pose, cfg), t)
         assert c.state == 'SIDESTEP'
     c.step(pose, view(blocker, pose, cfg), 5.1)
-    assert c.state == 'TURN_FORWARD' and c.turn_heading == 0.
+    assert c.state == 'REPLAN'
+
+
+def test_sidestep_ends_early_when_the_goal_route_stays_clear():
+    cfg = Settings(**ROVER)
+    c = started(cfg)
+    c.change('SIDESTEP', 0., 'diagonal bypass')
+    c.leg_heading, c.turn_heading = 0., -math.pi / 2
+    c.leg_start, c.side_length = np.zeros(2), 1.
+    pose = np.array([0., 0., -math.pi / 2])
+    clear = view(np.empty((0, 2)), pose, cfg)
+    assert c.step(pose, clear, .1)[0] > 0.
+    assert c.state == 'SIDESTEP'
+    assert c.step(pose, clear, .31) == (0., 0.)
+    assert c.state == 'REPLAN'  # No need to finish the planned 1 m diagonal.
+    c.step(pose, clear, .32)
+    c.step(pose, clear, .53)
+    assert c.state == 'REJOIN'
+
+
+def test_sidestep_rejoin_clearance_timer_resets_when_route_blocks():
+    cfg = Settings(**ROVER)
+    c = started(cfg)
+    c.change('SIDESTEP', 0., 'diagonal bypass')
+    c.leg_heading, c.turn_heading = 0., -math.pi / 2
+    c.leg_start, c.side_length = np.zeros(2), 1.
+    pose = np.array([0., 0., -math.pi / 2])
+    clear = view(np.empty((0, 2)), pose, cfg)
+    blocked = view(box(.7, 0.), pose, cfg)
+    c.step(pose, clear, .1)
+    c.step(pose, blocked, .2)
+    c.step(pose, clear, .31)
+    assert c.state == 'SIDESTEP'
+    c.step(pose, clear, .52)
+    assert c.state == 'REPLAN'
+
+
+def test_occupied_goal_ends_sidestep_and_stops_ten_cm_from_obstacle():
+    cfg = Settings(**ROVER)
+    c = started(cfg)
+    c.set_goal([.8, 0.])
+    c.change('SIDESTEP', 0., 'diagonal bypass')
+    c.leg_heading, c.turn_heading = 0., -math.pi / 2
+    c.leg_start, c.side_length = np.zeros(2), 1.
+    pose = np.array([0., 0., -math.pi / 2])
+    occupied = box(.8, 0.)
+    initial = view(occupied, pose, cfg)
+    assert not initial.rejoin_clear(math.pi / 2, .8)
+    assert initial.occupied_goal_standoff(math.pi / 2, .8) == pytest.approx(.8-.15-cfg.half_length-.10)
+    c.step(pose, initial, .1)
+    c.step(pose, initial, .31)
+    assert c.state == 'REPLAN'
+    c.step(pose, initial, .32)
+    c.step(pose, initial, .53)
+    assert c.state == 'REJOIN'
+
+    stop_x = .8-.15-cfg.half_length-.10
+    stopped = np.array([stop_x, 0., 0.])
+    at_stop = view(occupied, stopped, cfg)
+    assert at_stop.goal_clearance(0., .8-stop_x) == pytest.approx(.10)
+    c.step(stopped, at_stop, .60, measured_speed=0.)
+    c.step(stopped, at_stop, .90, measured_speed=0.)
+    assert c.state == 'GOAL_OCCUPIED'
+    assert not c.active
+    assert np.linalg.norm(c.goal-stopped[:2]) > cfg.goal_tolerance_m
+
+
+def test_obstacle_before_goal_is_not_treated_as_occupied_goal():
+    cfg = Settings(**ROVER)
+    pose = np.zeros(3)
+    c = started(cfg)
+    c.set_goal([.9, 0.])
+    before_goal = view(box(.45, 0.), pose, cfg)
+    assert before_goal.occupied_goal_standoff(0., .9) is None
+    assert c.rejoin_route(pose, before_goal) is None
+
+
+def test_stale_goal_blocker_does_not_end_at_an_occupied_goal():
+    cfg = Settings(**ROVER)
+    old, current = SeenEverywhere(), SeenEverywhere()
+    old.points = box(.8, 0.)
+    current.points = np.empty((0, 2))
+    observed = View([old, current], np.zeros(3), cfg, 0.)
+    assert observed.occupied_goal_standoff(0., .8) is None
 
 
 def test_run_10d_box_corner_at_the_front_corner_backs_up_then_centres():
@@ -347,13 +473,59 @@ def test_gap_centring_uses_the_lidar_not_the_drifted_odometry():
 def test_turn_finishes_despite_gyro_drift_at_the_tolerance_edge():
     cfg = Settings(**ROVER)
     c = started(cfg)
-    c.state, c.turn_heading, c.leg_heading = 'TURN_FORWARD', 0., 0.
+    c.state, c.turn_heading, c.leg_heading = 'TURN_OUT', 0., 0.
     heading, t = -.045, 0.                                              # just outside the 0.04 rad tolerance
-    while c.state == 'TURN_FORWARD' and t < 10:
+    while c.state == 'TURN_OUT' and t < 10:
         v, w = c.step(np.array([0., 0., heading]), view(np.empty((0, 2)), cfg=cfg), t, 0.)
         heading += (w * .25 - math.radians(.5)) * .05                   # slow turf turn, drifting gyro
         t += .05
-    assert c.state == 'PASS'
+    assert c.state == 'SIDESTEP'
+
+
+def test_replan_joins_clear_route_after_settle():
+    cfg = Settings(goal_distance=5.)
+    c = started(cfg)
+    c.leg_heading = 0.
+    c.leg_start = np.zeros(2)
+    c.change('REPLAN', 0., 'replanning')
+    clear = view(np.empty((0, 2)), cfg=cfg)
+    c.step(np.zeros(3), clear, .1)
+    assert c.state == 'REPLAN'
+    c.step(np.zeros(3), clear, .31)
+    assert c.state == 'REJOIN'
+
+
+def test_replan_stops_when_goal_route_is_unseen():
+    class Hidden(SeenEverywhere):
+        def visible_free(self, point):
+            return False
+    cfg = Settings(goal_distance=5.)
+    c = started(cfg)
+    c.leg_heading = 0.
+    c.leg_start = np.zeros(2)
+    c.change('REPLAN', 0., 'replanning')
+    pose = np.array([1., 0., 0.])
+    unseen = View([Hidden()], pose, cfg, 0.)
+    assert c.step(pose, unseen, .3) == (0., 0.)
+    assert c.state == 'STOP'
+    c.step(pose, unseen, .2)
+    c.step(pose, unseen, .5)
+    assert c.state != 'REJOIN'
+
+
+def test_ray_visibility_does_not_treat_occlusion_as_clear():
+    scan = Scan.__new__(Scan)
+    scan.pose = np.zeros(3)
+    scan.origin = np.zeros(2)
+    scan.yaw = 0.
+    scan.angle_min = -math.pi
+    scan.increment = math.pi / 180
+    scan.ranges = np.full(361, 4.)
+    scan.ranges[180] = .5
+    assert scan.visible_free(np.array([.4, 0.]))
+    assert not scan.visible_free(np.array([1., 0.]))
+    scan.ranges[180] = np.nan
+    assert not scan.visible_free(np.array([1., 0.]))
 
 
 def test_no_gap_falls_back_to_the_sidestep_and_still_finishes():

@@ -18,13 +18,15 @@ from std_msgs.msg import String
 from l2s1_marker_detection.camera_model import CameraModel
 from .pan_tracking import PanController
 from .geometry import MountModel
+from .relocalization_search import RelocalizationSearch
 
 
 class PanTracker(Node):
     def __init__(self):
         super().__init__('marker_pan_tracker')
         defaults = dict(target_ids=[0, 1, 2, 3, 4, 5], target_family='APRILTAG_standard41h12', missing_frames=3,
-                        detection_timeout_s=.8, max_image_age_s=1., max_speed_deg_s=8., gain=.7,
+                        detection_timeout_s=.8, max_image_age_s=1., max_speed_deg_s=8.,
+                        relocalize_speed_deg_s=12., gain=.7,
                         deadband_deg=3., smoothing_alpha=.25, max_pan_deg=120., tilt_deg=0.,
                         update_rate_hz=20., pan_sign=-1., tilt_sign=1., horizontal_fov_deg=0., fov_range_m=4.,
                         max_hamming=1, min_decision_margin=20., one_marker='center',
@@ -44,8 +46,10 @@ class PanTracker(Node):
                                      p['max_speed_deg_s'], p['gain'], p['deadband_deg'],
                                      p['smoothing_alpha'], p['max_pan_deg'],
                                      p['one_marker'], p['search_reach_deg'])
-        if not all(math.isfinite(p[k]) for k in ('update_rate_hz', 'tilt_deg', 'pan_sign', 'tilt_sign', 'horizontal_fov_deg', 'fov_range_m', 'max_image_age_s')):
+        if not all(math.isfinite(p[k]) for k in ('update_rate_hz', 'tilt_deg', 'pan_sign', 'tilt_sign', 'horizontal_fov_deg', 'fov_range_m', 'max_image_age_s', 'relocalize_speed_deg_s')):
             raise ValueError('Tracker settings must be finite')
+        if p['relocalize_speed_deg_s'] <= 0:
+            raise ValueError('relocalize_speed_deg_s must be positive')
         if not 5 <= p['update_rate_hz'] <= 100 or p['fov_range_m'] <= 0 or p['max_image_age_s'] <= 0 or not 0 <= p['horizontal_fov_deg'] < 180:
             raise ValueError('Invalid update rate, FOV, image age or range')
         if type(p['max_hamming']) is not int or not 0 <= p['max_hamming'] <= 2 or not math.isfinite(p['min_decision_margin']) or p['min_decision_margin'] < 0:
@@ -63,8 +67,15 @@ class PanTracker(Node):
         # over the camera; tracking resumes manual_hold_s seconds after the last one.
         self.manual = None          # (monotonic time, pan_deg, tilt_deg)
         self.relocalize_until = 0.
+        self.search = None
+        self.search_pose = None
+        self.search_pose_received = None
+        self.search_markers = {}
+        self.search_accepted = {}
         self.create_subscription(JointState, '/localization/pan_tilt_manual', self.on_manual, 1)
         self.create_subscription(String, '/localization/relocalize_camera', self.on_relocalize, 1)
+        self.create_subscription(String, '/marker_ranges/result', self.on_marker_map, 1)
+        self.create_subscription(String, '/marker_ekf/state', self.on_ekf_state, 1)
         self.pub = self.create_publisher(JointState, '/localization/pan_tilt_command', 1)
         self.state_pub = self.create_publisher(String, '~/state', 1)
         self.create_subscription(String, '/marker_detector/detections', self.on_detections, 1)
@@ -159,11 +170,41 @@ class PanTracker(Node):
                 return
             if remaining <= 0.:
                 self.relocalize_until = 0.
+                self.search = None
                 return
             now = time.monotonic()
             self.relocalize_until = now + min(remaining, 8.)
             self.control.start_relocalization(marker_id, now)
+            self.search = RelocalizationSearch(deadline-min(remaining, 8.), self.p['target_family'],
+                                               self.control.limit, self.control.recovery_bearing)
         except (ValueError, KeyError, TypeError):
+            return
+
+    def on_marker_map(self, message):
+        try:
+            data = json.loads(message.data)
+            if data.get('frame_id') != 'map':
+                return
+            self.search_markers = {item['id']: item['known_position_m'][:2]
+                for item in data['markers'] if item.get('family') == self.p['target_family']
+                and type(item.get('id')) is int and isinstance(item.get('known_position_m'), list)
+                and len(item['known_position_m']) >= 2
+                and all(math.isfinite(float(x)) for x in item['known_position_m'][:2])}
+        except (ValueError, KeyError, TypeError):
+            return
+
+    def on_ekf_state(self, message):
+        try:
+            data = json.loads(message.data)
+            pose = (float(data['x_m']), float(data['y_m']), math.radians(float(data['heading_deg'])))
+            if (data.get('frame_id') != 'map' or data.get('mode') not in ('tracking', 'odometry_only')
+                    or not all(math.isfinite(x) for x in pose)):
+                return
+            self.search_pose = pose
+            self.search_pose_received = time.monotonic()
+            self.search_accepted = {k: float(v) for k, v in data.get('accepted_marker_stamps_s', {}).items()
+                                    if isinstance(k, str) and math.isfinite(float(v))}
+        except (ValueError, KeyError, TypeError, AttributeError):
             return
 
     def tick(self):
@@ -176,6 +217,17 @@ class PanTracker(Node):
             _, pan, tilt = self.manual
             self.control.pan = pan          # tracking continues from here afterwards
             self.control.mode = 'manual'
+        elif self.search is not None and now < self.relocalize_until:
+            # Refresh track expiry with the normal controller before choosing a search action.
+            self.control.tracked_ids = [tag for tag in self.control.ids if tag in self.control.tracks
+                and self.control.tracks[tag]['misses'] < self.control.grace
+                and now-self.control.tracks[tag]['time'] <= self.control.timeout]
+            pose = self.search_pose if self.search_pose_received is not None and now-self.search_pose_received <= 1. else None
+            target, self.control.mode = self.search.step(self.control, now, pose, self.search_markers, self.search_accepted)
+            maximum = self.p['relocalize_speed_deg_s'] * min(max(0., now-self.last_tick), .1)
+            pan = self.control.pan + max(-maximum, min(maximum, target-self.control.pan))
+            self.control.pan = pan
+            tilt = self.p['tilt_deg']
         else:
             pan = self.control.step(now-self.last_tick, now, relocalizing=now < self.relocalize_until)
             tilt = self.p['tilt_deg']
@@ -192,6 +244,7 @@ class PanTracker(Node):
             left = right = math.radians(self.p['horizontal_fov_deg']/2)
         origin = MountModel().camera_center(math.radians(pan), math.radians(tilt))
         state = dict(ready=True, pan_deg=pan, tilt_deg=tilt, mode=self.control.mode,
+                     search_target_id=self.search.target_id if self.search and now < self.relocalize_until else None,
                      tracked_ids=self.control.tracked_ids,
                      left_rad=left, right_rad=right, range_m=self.p['fov_range_m'],
                      origin_base=[float(origin[0]), float(origin[1]), .01],

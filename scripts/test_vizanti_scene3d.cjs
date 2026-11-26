@@ -12,7 +12,7 @@ let fieldClient, fieldClosed=false, groundFills=0, labels=[], duckPositions=[];
 const topics = {}, elements = {};
 const context = new Proxy({}, {get: (_, key) => key === 'fillRect' ? () => rectangles++ : key === 'fill' ? () => groundFills++ : key === 'fillText' ? text => labels.push(text) : key === 'translate' ? (x,y) => duckPositions.push([x,y]) : () => {}});
 for (const name of ['panel','canvas','follow','status','toggle','origin','clear','close','mode','field_view','markers_status',
-    'controller_panel','controller_state','controller_summary','controller_reason','controller_warning','controller_comparison'])
+    'controller_panel','controller_state','controller_summary','controller_reason','controller_warning','controller_uncertainty','controller_comparison'])
     elements[`{uniqueID}_${name}`] = {hidden:false, checked:false, clientWidth:1000, clientHeight:700,
         isConnected:true, style:{}, getContext:()=>context, addEventListener:()=>{}, setPointerCapture:()=>{}};
 const helperSource = fs.readFileSync('src/ugv_else/vizanti/vizanti_server/public/js/modules/football_field.js','utf8')
@@ -97,14 +97,15 @@ assert.deepEqual(duckPositions[duckPositions.length-1],duckPosition,
     'field-frame duck was incorrectly transformed through odometry');
 fieldClient.state.transform=[2,-1,Math.PI/2];
 fieldClient.motion={frame_id:'map',session_id:'scene-test',revision:1,state:'PASS',readiness:'Ready',
-    reason:'Passing obstacle',motion_status:'Moving with bounded acceleration',goal:fieldClient.curling.goal,
+    ekf:{valid:true,fresh:true,sigma_position_m:.23,sigma_heading_deg:8.4},reason:'Passing obstacle',motion_status:'Moving with bounded acceleration',goal:fieldClient.curling.goal,
     navigation:{ready:true,distance_to_goal_m:4.2},local_pose:[-2.2,0,0],local_fresh:true,local_age_s:.05,local_timeout_s:1.5,
     fused_pose:[-2.1,.2,.1],fused_age_s:.1,fused_timeout_s:1,distance_to_goal_m:4.2,
     comparison:{distance_m:.22,heading_deg:5.7},
     intent:{kind:'drive',path:[[-2.1,.2],[-1.7,.24]],label:'PASS · 0.70 m remaining'}};
 frame();
 assert(labels.includes('LOCAL (-2.20, 0.00)'),'local marker missing in 3D');
-assert(labels.includes('4.20 m to goal'),'goal reference line label missing in 3D');
+assert(!labels.includes('4.20 m to goal'),'removed goal line label appeared in 3D');
+assert.match(elements['{uniqueID}_controller_uncertainty'].textContent,/0.23 m · 8.4°/);
 assert(labels.includes('PASS · 0.70 m remaining'),'action arrow missing in 3D');
 assert.equal(elements['{uniqueID}_controller_state'].textContent,'PASS');
 assert.match(elements['{uniqueID}_controller_comparison'].textContent,/0.22 m · 5.7°/);

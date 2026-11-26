@@ -12,6 +12,7 @@ marker_pan_tracker:
     detection_timeout_s: 1
     max_image_age_s: 1.5
     max_speed_deg_s: 8.0  # Maximum pan setpoint change per second, including return.
+    relocalize_speed_deg_s: 12.0  # Pan speed only during the stationary final search.
     gain: 0.7
     deadband_deg: 3.0
     smoothing_alpha: 0.25

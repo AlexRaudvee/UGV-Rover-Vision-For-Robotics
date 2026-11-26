@@ -11,8 +11,6 @@ from uuid import uuid4
 
 CAMERA_TOPICS = {
     'oak_color': '/oak/rgb/image_rect/compressed',
-    'stereo_depth': '/wls_filtered/depth_preview/compressed',
-    'depth_detection': '/detection_improved/obstacle/debug/compressed',
 }
 
 
@@ -37,30 +35,23 @@ class DecisionLog:
         if stamp > 0 and 0 < len(message.data) <= 1024 * 1024:
             self.frames[name].append((stamp, message))
 
-    def enqueue(self, record, depth_stamp=None):
+    def enqueue(self, record):
         now = record['stamp_s']
         self.sequence += 1
         event_id = f'{self.sequence:04d}-{record["kind"]}'
         images = {}
         record.update(event_id=event_id, images={})
         for name, frames in self.frames.items():
-            references = [('decision', now)]
-            if depth_stamp is not None:
-                references.insert(0, ('stereo_observation', depth_stamp))
             received = [(stamp, message) for stamp, message in frames if stamp <= now+.1]
-            for match, reference in references:
-                if not received:
-                    break
-                stamp, message = min(received, key=lambda frame: abs(frame[0]-reference))
-                if abs(stamp-reference) > .45:
-                    continue
-                suffix = '.png' if 'png' in message.format.lower() else '.jpg'
-                filename = name + suffix
-                images[filename] = message
-                record['images'][name] = dict(path=f'{event_id}/{filename}', stamp_s=stamp,
-                                              age_s=now-stamp, matched_to=match,
-                                              reference_stamp_s=reference)
-                break
+            if received:
+                stamp, message = min(received, key=lambda frame: abs(frame[0]-now))
+                if abs(stamp-now) <= .45:
+                    suffix = '.png' if 'png' in message.format.lower() else '.jpg'
+                    filename = name + suffix
+                    images[filename] = message
+                    record['images'][name] = dict(path=f'{event_id}/{filename}', stamp_s=stamp,
+                                                  age_s=now-stamp, matched_to='decision',
+                                                  reference_stamp_s=now)
             if name not in record['images']:
                 record['images'][name] = dict(path=None, reason='No recent frame near reference timestamp')
         try:

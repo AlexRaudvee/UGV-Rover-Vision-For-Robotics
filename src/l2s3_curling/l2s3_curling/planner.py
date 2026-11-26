@@ -1,4 +1,4 @@
-"""Stop, quarter turn, sidestep, quarter turn, pass, then diagonal to the goal."""
+"""EKF-guided goal navigation with LiDAR gap and diagonal obstacle avoidance."""
 from dataclasses import dataclass
 import math
 import numpy as np
@@ -17,6 +17,16 @@ ARC_SPEED = .08           # Forward speed while turning when a turn on the spot 
 
 def wrap(angle):
     return math.atan2(math.sin(angle),math.cos(angle))
+
+
+def turn_direction_mismatch(sent, requested, yaw_rate):
+    """Diagnose sign only during a steady, commanded in-place turn."""
+    sent_v, sent_w = sent
+    requested_v, requested_w = requested
+    return (abs(sent_v) < .02 and abs(requested_v) < .02 and
+            abs(sent_w) > .20 and abs(requested_w) > .20 and
+            sent_w * requested_w > 0 and abs(yaw_rate) > .10 and
+            sent_w * yaw_rate < -.02)
 
 
 def rotation(angle):
@@ -96,7 +106,12 @@ class Settings:
     emergency_clearance: float = .08
     sidestep_min: float = .50
     sidestep_max: float = 1.20
-    pass_distance: float = 1.0
+    bypass_angle_margin_deg: float = 5.0
+    bypass_max_distance: float = 2.20
+    rejoin_check_distance: float = 1.0
+    rejoin_clear_time: float = .2
+    occupied_goal_radius_m: float = .35
+    occupied_goal_clearance_m: float = .10
     braking_deceleration: float = .5
     angular_acceleration: float = 1.2
     reaction_time: float = .20
@@ -132,6 +147,8 @@ class Settings:
             raise ValueError('Invalid turn speed or obstacle clearances')
         if self.sidestep_min>self.sidestep_max or self.minimum_coverage>1:
             raise ValueError('Invalid sidestep limits or coverage fraction')
+        if self.bypass_angle_margin_deg > 45:
+            raise ValueError('Bypass angle margin must not exceed 45 degrees')
 
     @property
     def radius(self):
@@ -186,19 +203,28 @@ class Scan:
         lo=max(0,index-reach);hi=min(len(self.ranges),index+reach+1)
         return bool(np.isfinite(self.ranges[lo:hi]).any())
 
+    def visible_free(self, world_point):
+        """True only when the ray through the point reaches beyond it."""
+        base=(world_point-self.pose[:2])@rotation(self.pose[2])
+        point=(base-self.origin)@rotation(self.yaw)
+        angle=math.atan2(point[1],point[0]);middle=self.angle_min+(len(self.ranges)-1)*self.increment/2
+        index=int(round((middle+wrap(angle-middle)-self.angle_min)/self.increment))
+        if not 0<=index<len(self.ranges):return False
+        measured=self.ranges[index]
+        return bool(math.isfinite(measured) and measured >= np.linalg.norm(point)+.02)
+
 
 class View:
-    def __init__(self,scans,pose,depth,cfg,age,depth_stamp=None):
+    def __init__(self,scans,pose,cfg,age):
         self.pose=np.asarray(pose);self.cfg=cfg;self.age=max(0.,age);self.scans=scans
         world=[s.points for s in scans]
         self.sources = [(len(scan.points), 'lidar_current' if i == len(scans)-1 else 'lidar_history',
                          getattr(scan, 'stamp', None)) for i, scan in enumerate(scans)]
-        if len(depth):
-            world.append(np.asarray(depth))
-            self.sources.append((len(depth), 'stereo_depth', depth_stamp))
         self.gap_options = None
         self.world=np.vstack(world) if world else np.empty((0,2))
         self.points=(self.world-self.pose[:2])@rotation(self.pose[2])
+        self.latest_points=((scans[-1].points-self.pose[:2])@rotation(self.pose[2])
+                            if scans else np.empty((0,2)))
 
     def clearance_points(self, heading=0., margin=None):
         p=self.points@rotation(heading)
@@ -212,6 +238,25 @@ class View:
     def clearance(self, heading=0., margin=None):
         p, front = self.clearance_points(heading, margin)
         return float(p[front, 0].min()-self.cfg.half_length) if front.any() else math.inf
+
+    def goal_clearance(self, heading, distance):
+        """Clearance to points the rover could hit before its centre reaches the goal."""
+        p, front = self.clearance_points(heading)
+        front &= p[:,0] <= distance + self.cfg.half_length
+        return float(p[front,0].min()-self.cfg.half_length) if front.any() else math.inf
+
+    def occupied_goal_standoff(self, heading, distance):
+        """Signed travel to a fresh goal blocker with the requested bumper clearance."""
+        p = self.latest_points @ rotation(heading)
+        front = ((p[:,0] > self.cfg.half_length-.02) &
+                 (abs(p[:,1]) < self.cfg.half_width+self.cfg.side_margin))
+        front &= p[:,0] <= distance + self.cfg.half_length
+        if not front.any():
+            return None
+        nearest = p[np.flatnonzero(front)[np.argmin(p[front, 0])]]
+        if math.hypot(nearest[0]-distance, nearest[1]) > self.cfg.occupied_goal_radius_m:
+            return None
+        return float(nearest[0]-self.cfg.half_length-self.cfg.occupied_goal_clearance_m)
 
     def point_evidence(self, indices):
         """Return robot-frame coordinates and acquisition provenance for selected points."""
@@ -256,6 +301,22 @@ class View:
         return (not self.segment_blockers(heading, distance).any()
                 and self.coverage(heading,distance)>=self.cfg.minimum_coverage)
 
+    def rejoin_clear(self, heading, distance):
+        """Check the footprint corridor and ray visibility, including occluded space."""
+        if not self.rotation_clear() or self.segment_blockers(heading, distance).any():
+            return False
+        # The robot already occupies the first part of the corridor. Sample the
+        # remainder, including the front overhang at the end of the planned leg.
+        end = distance + self.cfg.half_length
+        start = min(end, self.cfg.half_length + .10)
+        width = self.cfg.half_width + self.cfg.side_margin
+        for x in np.linspace(start, end, max(2, math.ceil((end-start)/.15)+1)):
+            for y in np.linspace(-width, width, 5):
+                world = np.array([x, y]) @ rotation(heading+self.pose[2]).T + self.pose[:2]
+                if not self.scans or not self.scans[-1].visible_free(world):
+                    return False
+        return True
+
     def sidestep_evidence(self, side, distance, clear):
         heading = side*math.pi/2
         entry = dict(distance_m=distance, clear=clear, heading_rad=heading)
@@ -270,12 +331,42 @@ class View:
     def rotation_clear(self):
         return not np.any(np.linalg.norm(self.points,axis=1)<self.cfg.radius)
 
-    def side_distance(self,side):
-        front=self.clearance()+self.cfg.half_length
-        p=self.points[(self.points[:,0]>max(.05,front-.12))&
-                      (self.points[:,0]<front+.30)&(abs(self.points[:,1])<.9)]
+    def side_distance(self,side,route_heading=0.,goal_distance=None):
+        p=self.points@rotation(route_heading)
+        clearance=(self.clearance(route_heading) if goal_distance is None else
+                   self.goal_clearance(route_heading,goal_distance))
+        if not math.isfinite(clearance):return math.inf
+        front=clearance+self.cfg.half_length
+        p=p[(p[:,0]>max(.05,front-.12))&
+            (p[:,0]<front+.30)&(abs(p[:,1])<.9)]
         edge=float(np.max(side*p[:,1])) if len(p) else .20
         return max(self.cfg.sidestep_min,edge+self.cfg.half_width+self.cfg.side_margin+.05)
+
+    def bypass(self, side, route_heading, goal_distance=None):
+        """Find a clear diagonal to the required lateral offset, in 1 degree steps."""
+        relative_route = wrap(route_heading - self.pose[2])
+        offset = self.side_distance(side, relative_route, goal_distance)
+        if offset > self.cfg.sidestep_max:
+            return None
+        def candidate(degrees):
+            angle = math.radians(degrees)
+            distance = offset / math.sin(angle)
+            # Bound the forward excursion and include stopping room at the end.
+            if distance > self.cfg.bypass_max_distance:
+                return None
+            if goal_distance is not None and distance*math.cos(angle) >= goal_distance-self.cfg.goal_tolerance_m:
+                return None
+            heading = wrap(relative_route + side * angle)
+            if not self.segment_clear(heading, distance + self.cfg.stop_clearance):
+                return None
+            return angle, distance
+        for degrees in range(1, 91):
+            if candidate(degrees) is not None:
+                # Check the margin separately: a larger angle can meet another obstacle.
+                result = candidate(min(90., degrees + self.cfg.bypass_angle_margin_deg))
+                if result is not None:
+                    return result
+        return None
 
     def gap_sides(self):
         """Measured (right edge, left edge) of the gap around the rover, in its own frame, or None.
@@ -399,10 +490,11 @@ class Controller:
         self.cfg=cfg or Settings();self.state='IDLE';self.reason='Call start when LiDAR, gyro and odometry are available'
         self.side=0;self.passes=0;self.target=None;self.side_choices={};self.side_blocked_since=None;self.backoff_start=None
         self.stop_blocked_since=None;self.look_free=-1;self.look_excluded=set();self.look_target=None;self.now=0.
+        self.rejoin_clear_since=None
         self.decision = None
 
     @property
-    def active(self):return self.state not in ('IDLE','DONE','FAULT')
+    def active(self):return self.state not in ('IDLE','DONE','FAULT','GOAL_OCCUPIED')
 
     def start(self,pose,now):
         self.goal=np.array([self.cfg.goal_distance,0.]);self.started=now;self.passes=0;self.side=0
@@ -420,6 +512,7 @@ class Controller:
 
     def change(self,state,now,reason):
         self.state=state;self.entered=now;self.reason=reason;self.settled_since=None
+        if state in ('TURN_OUT','REPLAN','RELOCALIZE'):self.rejoin_clear_since=None
 
     def stop(self):
         self.state='IDLE';self.reason='Mission stopped';self.target=None
@@ -448,6 +541,19 @@ class Controller:
                              clearance=view.clearance_evidence(heading, margin),
                              threshold_m=threshold, options=options)
 
+    def rejoin_route(self, pose, view):
+        """Return the observed route to the goal or to a safe occupied-goal stop."""
+        delta = self.goal - pose[:2]
+        distance = float(np.linalg.norm(delta))
+        heading = wrap(math.atan2(delta[1], delta[0]) - pose[2])
+        if view.rejoin_clear(heading, min(distance, self.cfg.rejoin_check_distance)):
+            return 'direct', distance
+        if distance <= self.cfg.rejoin_check_distance:
+            standoff = view.occupied_goal_standoff(heading, distance)
+            if standoff is not None and standoff >= 0. and view.rejoin_clear(heading, standoff):
+                return 'occupied', standoff
+        return None
+
     def turn(self,pose,view,now,yaw_rate,next_state):
         error=wrap(self.turn_heading-pose[2])
         if not view.rotation_clear():
@@ -467,7 +573,9 @@ class Controller:
         self.reason=f'Turning: {math.degrees(error):.1f} degrees remaining'
         return 0.,math.copysign(speed,error)
 
-    def forward(self,pose,view,heading,remaining,ceiling,margin=None):
+    def forward(self,pose,view,heading,remaining,ceiling,margin=None,goal_limited=False,
+                stop_clearance=None):
+        stop_clearance=self.cfg.stop_clearance if stop_clearance is None else stop_clearance
         error=wrap(heading-pose[2])
         if abs(error)>.20:
             if view.rotation_clear():
@@ -476,16 +584,17 @@ class Controller:
             # Something within the turning circle (run 10f: after the gap, in REJOIN, it waited
             # here silently for good). If the way ahead is clear, turn while creeping forward,
             # which moves the rover away from it; otherwise back up until it can turn.
-            if view.clearance()>self.cfg.stop_clearance+.15:
+            if view.clearance()>stop_clearance+.15:
                 self.reason=f'{self.state}: too close to turn on the spot; turning while moving'
                 return ARC_SPEED,float(np.clip(1.5*error,-.3,.3))
             return self.back_off(pose,view,self.now,'Something inside the turning circle')
-        clearance=view.clearance(error,margin)
-        allowed=min(remaining,clearance-self.cfg.stop_clearance)
+        clearance=view.goal_clearance(error,remaining) if goal_limited else view.clearance(error,margin)
+        allowed=min(remaining,clearance-stop_clearance)
         speed=self.speed_limit(allowed,ceiling,view.age)
-        if clearance <= self.cfg.stop_clearance:
-            self.note_clearance('hold', view, self.cfg.stop_clearance, error, margin)
-        horizon=self.cfg.half_length+self.cfg.stop_clearance+(self.cfg.reaction_time+view.age)*speed+speed**2/(2*self.cfg.braking_deceleration)
+        if clearance <= stop_clearance:
+            self.note_clearance('hold', view, stop_clearance, error, margin)
+        horizon=self.cfg.half_length+stop_clearance+(self.cfg.reaction_time+view.age)*speed+speed**2/(2*self.cfg.braking_deceleration)
+        if goal_limited:horizon=min(horizon,remaining+self.cfg.half_length)
         if view.coverage(error,horizon)<self.cfg.minimum_coverage:
             self.reason='Forward LiDAR sector not observed; waiting';return 0.,0.
         self.reason=f'{self.state}: clearance {clearance:.2f} m, remaining {remaining:.2f} m'
@@ -506,6 +615,7 @@ class Controller:
         if now-self.progress_at>25 and abs(measured_speed)>.03:return self.fail('No position progress despite measured motion')
         margin=0. if self.state=='GAP_THROUGH' else None
         if view.clearance(0.,margin)<self.cfg.emergency_clearance:
+            self.rejoin_clear_since=None
             # Something this close ahead is also inside the turning circle, so the only way
             # out is back (runs 10d and 10g waited here for good).
             return self.back_off(pose,view,now,'Emergency front clearance', margin)
@@ -514,8 +624,28 @@ class Controller:
         if self.state in ('APPROACH','REJOIN'):
             delta=self.goal-pose[:2];distance=float(np.linalg.norm(delta))
             heading=math.atan2(delta[1],delta[0]);error=wrap(heading-pose[2])
+            if distance<=self.cfg.rejoin_check_distance:
+                standoff=view.occupied_goal_standoff(error,distance)
+                if standoff is not None:
+                    if standoff < -.02:
+                        return self.back_off(pose,view,now,'Occupied goal closer than 10 cm')
+                    if standoff<=.015 and abs(error)<.20:
+                        if abs(measured_speed)>.05:
+                            self.settled_since=None
+                            return 0.,0.
+                        if self.settled_since is None:self.settled_since=now
+                        if now-self.settled_since>=self.cfg.settle_time:
+                            self.change('GOAL_OCCUPIED',now,
+                                'Goal occupied; stopped with 10 cm bumper clearance')
+                        return 0.,0.
+                    if view.rejoin_clear(error,standoff):
+                        self.settled_since=None
+                        return self.forward(pose,view,heading,distance,self.cfg.avoidance_speed,
+                                            goal_limited=True,
+                                            stop_clearance=self.cfg.occupied_goal_clearance_m)
+            self.settled_since=None
             if abs(error)<.20:
-                clearance = view.clearance(error)
+                clearance = view.goal_clearance(error,distance)
                 stop_threshold = self.cfg.stop_clearance + self.cfg.distance_tolerance
                 # Only plan around an obstacle if it would bring the rover within
                 # the stopping threshold before or at the goal.
@@ -525,20 +655,32 @@ class Controller:
                 if clearance <= stop_threshold:
                     self.note_clearance('stop', view, stop_threshold, error, gap=view.gap_options)
                     self.leg_heading=heading;self.change('STOP',now,'Stopping before obstacle');return 0.,0.
-            return self.forward(pose,view,heading,distance,self.cfg.speed)
+            return self.forward(pose,view,heading,distance,self.cfg.speed,goal_limited=True)
         if self.state=='STOP':
             if abs(measured_speed)>.05:return 0.,0.
             if self.settled_since is None:self.settled_since=now
             if now-self.settled_since<self.cfg.settle_time:return 0.,0.
             if self.resume_direct_if_clear(pose,view,now):return 0.,0.
-            if self.enter_gap(pose,view,self.leg_heading,now):return 0.,0.
+            goal_distance=float(np.linalg.norm(self.goal-pose[:2]))
+            self.leg_heading=math.atan2(self.goal[1]-pose[1],self.goal[0]-pose[0])
+            relative=wrap(self.leg_heading-pose[2])
+            if not math.isfinite(view.goal_clearance(relative,goal_distance)):
+                if abs(relative)>.20 and not view.rotation_clear():
+                    return self.back_off(pose,view,now,'Something inside the turning circle')
+                self.reason='No obstacle before goal, but direct route is not fully observed; waiting'
+                return 0.,0.
+            if self.enter_gap(pose,view,self.leg_heading,now):
+                return 0.,0.
             candidates=[];self.side_choices={}
             for side in (-1,1):
-                distance=view.side_distance(side);angle=side*math.pi/2
-                clear=distance<=self.cfg.sidestep_max and view.segment_clear(angle,distance)
-                self.side_choices['right' if side<0 else 'left']=dict(distance_m=distance,clear=clear)
-                if clear:candidates.append((distance,side))
+                offset=view.side_distance(side,relative,goal_distance)
+                plan=view.bypass(side,self.leg_heading,goal_distance)
+                self.side_choices['right' if side<0 else 'left']=dict(distance_m=offset,clear=plan is not None)
+                if plan is not None:candidates.append((plan[0],side,plan[1]))
             if not candidates:
+                if goal_distance<=self.cfg.rejoin_check_distance:
+                    self.reason='No safe goal-bounded bypass; holding for a new scan'
+                    return 0.,0.
                 # Wait briefly in case it is a person; then look around instead of staring
                 # at the same blocked view until the mission timeout (run 10e).
                 if self.stop_blocked_since is None:self.stop_blocked_since=now
@@ -547,9 +689,9 @@ class Controller:
                     return self.start_look(pose,view,now)
                 self.reason='Both sidestep corridors blocked/unobserved; waiting for clearance';return 0.,0.
             self.stop_blocked_since=None
-            shortest=min(p[0] for p in candidates)
-            distance,self.side=next((p for p in candidates if p[1]<0 and p[0]<=shortest+.05),min(candidates))
-            self.side_length=distance;self.turn_heading=wrap(self.leg_heading+self.side*math.pi/2)
+            smallest=min(p[0] for p in candidates)
+            angle,self.side,distance=next((p for p in candidates if p[1]<0 and p[0]<=smallest+math.radians(1)),min(candidates))
+            self.side_length=distance;self.turn_heading=wrap(self.leg_heading+self.side*angle)
             self.target=pose[:2]+distance*np.array([math.cos(self.turn_heading),math.sin(self.turn_heading)])
             sides = {
                 name: view.sidestep_evidence(sign, self.side_choices[name]['distance_m'],
@@ -559,41 +701,55 @@ class Controller:
             self.note_clearance('sidestep', view, None, wrap(self.leg_heading-pose[2]),
                                 gap=view.gap_options, gap_lookahead_m=self.cfg.gap_lookahead,
                                 sides=sides, selected_side='right' if self.side < 0 else 'left',
+                                selected_angle_deg=math.degrees(angle), diagonal_distance_m=distance,
                                 sidestep_max_m=self.cfg.sidestep_max,
                                 minimum_coverage=self.cfg.minimum_coverage)
             self.decision['check'] = 'sidestep_corridors'
-            self.change('TURN_OUT',now,'Committed to quarter turn and sidestep');return 0.,0.
+            self.change('TURN_OUT',now,'Committed to diagonal bypass');return 0.,0.
         if self.state=='TURN_OUT':return self.turn(pose,view,now,yaw_rate,'SIDESTEP')
         if self.state=='SIDESTEP':
             progress=float((pose[:2]-self.leg_start)@np.array([math.cos(self.turn_heading),math.sin(self.turn_heading)]))
             remaining=self.side_length-progress
-            if remaining<=self.cfg.distance_tolerance:
-                self.turn_heading=self.leg_heading
-                self.change('TURN_FORWARD',now,'Sidestep complete; turning back parallel to route');return 0.,0.
+            along=np.array([math.cos(self.leg_heading),math.sin(self.leg_heading)])
+            if remaining<=self.cfg.distance_tolerance or float((self.goal-pose[:2])@along)<=self.cfg.goal_tolerance_m:
+                self.change('REPLAN',now,'Diagonal finished; checking a new route to goal');return 0.,0.
+            route=self.rejoin_route(pose,view)
+            if route is not None:
+                if self.rejoin_clear_since is None:self.rejoin_clear_since=now
+                if now-self.rejoin_clear_since>=self.cfg.rejoin_clear_time:
+                    self.change('REPLAN',now,
+                        'Goal route clear during sidestep; stopping to confirm rejoin')
+                    return 0.,0.
+            else:
+                self.rejoin_clear_since=None
             if view.clearance()<=self.cfg.stop_clearance+self.cfg.distance_tolerance:
-                # Run 10b waited here until the mission timeout. After SIDESTEP_BLOCKED_S,
-                # turn back to the route and re-plan from PASS, which stops and chooses a
-                # new side (possibly the other one) if the obstacle is still ahead.
+                # A blocked diagonal needs a fresh route decision from this position.
                 if self.side_blocked_since is None:self.side_blocked_since=now
                 if now-self.side_blocked_since>=SIDESTEP_BLOCKED_S:
-                    self.side_blocked_since=None;self.turn_heading=self.leg_heading
+                    self.side_blocked_since=None
                     self.note_clearance('stop', view, self.cfg.stop_clearance+self.cfg.distance_tolerance)
-                    self.change('TURN_FORWARD',now,'Sidestep blocked; turning back to the route to re-plan');return 0.,0.
+                    self.change('REPLAN',now,'Diagonal blocked; checking a new route to goal');return 0.,0.
                 self.note_clearance('hold', view, self.cfg.stop_clearance+self.cfg.distance_tolerance)
                 self.reason='Sidestep path became blocked; waiting';return 0.,0.
             self.side_blocked_since=None
             return self.forward(pose,view,self.turn_heading,remaining,self.cfg.avoidance_speed)
-        if self.state=='TURN_FORWARD':return self.turn(pose,view,now,yaw_rate,'PASS')
-        if self.state=='PASS':
-            progress=float((pose[:2]-self.leg_start)@np.array([math.cos(self.leg_heading),math.sin(self.leg_heading)]))
-            remaining=self.cfg.pass_distance-progress
-            if remaining<=self.cfg.distance_tolerance:
-                self.passes+=1;self.target=self.goal.copy()
-                self.change('REJOIN',now,'Pass complete; diagonal directly to original endpoint');return 0.,0.
-            if view.clearance()<=self.cfg.stop_clearance+self.cfg.distance_tolerance:
-                self.note_clearance('stop', view, self.cfg.stop_clearance+self.cfg.distance_tolerance)
-                self.change('STOP',now,'New obstacle in passing corridor');return 0.,0.
-            return self.forward(pose,view,self.leg_heading,remaining,self.cfg.avoidance_speed)
+        if self.state=='REPLAN':
+            if abs(measured_speed)>.05:return 0.,0.
+            route=self.rejoin_route(pose,view)
+            if route is not None:
+                if self.rejoin_clear_since is None:self.rejoin_clear_since=now
+                if now-self.rejoin_clear_since>=self.cfg.rejoin_clear_time:
+                    self.passes+=1;self.target=self.goal.copy()
+                    self.change('REJOIN',now,'Route to goal is clear' if route[0]=='direct'
+                                else 'Goal occupied; approaching safe stopping point')
+                    return 0.,0.
+            else:
+                self.rejoin_clear_since=None
+                if now-self.entered>=self.cfg.rejoin_clear_time:
+                    delta=self.goal-pose[:2]
+                    self.leg_heading=math.atan2(delta[1],delta[0])
+                    self.change('STOP',now,'New route blocked; planning another avoidance move')
+            return 0.,0.
         if self.state=='GAP':
             # Re-aim at the entry point every cycle so the rover arrives on the gap's centre line.
             delta=self.gap_entry-pose[:2];fixed=np.array([math.cos(self.gap_heading),math.sin(self.gap_heading)])
@@ -631,6 +787,8 @@ class Controller:
         if self.state=='GAP_THROUGH':
             along=np.array([math.cos(self.leg_heading),math.sin(self.leg_heading)]);left=np.array([-along[1],along[0]])
             offset=pose[:2]-self.leg_start;remaining=self.gap_through-float(offset@along)
+            if float((self.goal-pose[:2])@along)<=self.cfg.goal_tolerance_m:
+                self.change('REPLAN',now,'Goal reached or passed along gap route; replanning');return 0.,0.
             if remaining<=self.cfg.distance_tolerance:
                 self.passes+=1;self.target=self.goal.copy()
                 self.change('REJOIN',now,'Through the gap; diagonal directly to original endpoint');return 0.,0.
@@ -664,9 +822,12 @@ class Controller:
         if self.state=='ESCAPE':
             direction=np.array([math.cos(self.escape_heading),math.sin(self.escape_heading)])
             remaining=ESCAPE_M-float((pose[:2]-self.leg_start)@direction)
+            goal_forward=float((self.goal-self.leg_start)@direction)
+            if goal_forward>0:
+                remaining=min(remaining,float((self.goal-pose[:2])@direction)-self.cfg.goal_tolerance_m)
             if remaining<=self.cfg.distance_tolerance:
                 self.target=self.goal.copy()
-                self.change('REJOIN',now,'Moved to a new view; diagonal to the original endpoint');return 0.,0.
+                self.change('REJOIN',now,'Escape leg ended; driving toward goal');return 0.,0.
             if view.clearance()<=self.cfg.stop_clearance+self.cfg.distance_tolerance:
                 self.note_clearance('stop', view, self.cfg.stop_clearance+self.cfg.distance_tolerance)
                 self.change('STOP',now,'Escape path blocked; stopping');return 0.,0.
@@ -751,12 +912,13 @@ class Controller:
         heading = math.atan2(delta[1], delta[0])
         relative = wrap(heading - pose[2])
         threshold = distance + self.cfg.stop_clearance + self.cfg.distance_tolerance
-        if view.clearance(relative) <= threshold:
+        if view.goal_clearance(relative,distance) <= self.cfg.stop_clearance+self.cfg.distance_tolerance:
             return False
         if abs(relative) > .20 and not view.rotation_clear():
             return False
         if (not view.segment_clear(relative, distance)
-                or view.coverage(relative, distance/2) < self.cfg.minimum_coverage):
+                or view.coverage(relative, distance/2) < self.cfg.minimum_coverage
+                or not view.rejoin_clear(relative, min(distance, self.cfg.rejoin_check_distance))):
             return False
 
         self.note_clearance('direct_resume', view, threshold, relative,
@@ -771,6 +933,10 @@ class Controller:
         plan=view.gap_plan(wrap(heading-pose[2]))
         if plan is None:return False
         relative,distance,through=plan
+        direction=np.array([math.cos(heading),math.sin(heading)])
+        entry_forward=distance*math.cos(wrap(pose[2]+relative-heading))
+        if entry_forward+through >= float((self.goal-pose[:2])@direction)-self.cfg.goal_tolerance_m:
+            return False
         self.leg_heading=heading;self.gap_heading=wrap(pose[2]+relative)
         self.gap_through=through;self.gap_blocked_since=None
         self.gap_entry=pose[:2]+distance*np.array([math.cos(self.gap_heading),math.sin(self.gap_heading)])

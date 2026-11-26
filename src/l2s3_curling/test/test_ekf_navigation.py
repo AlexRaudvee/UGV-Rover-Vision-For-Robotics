@@ -17,10 +17,13 @@ class ObservedEmptySpace:
     def observed(self, point):
         return True
 
+    def visible_free(self, point):
+        return True
+
 
 def clear_view(node):
     # All clearance checks run against synthetic, observed empty space.
-    return View([ObservedEmptySpace()], node.pose, [], node.controller.cfg, 0.)
+    return View([ObservedEmptySpace()], node.pose, node.controller.cfg, 0.)
 
 
 def navigation_setup(node, field_pose, motion_pose):
@@ -105,6 +108,7 @@ def test_control_loop_steers_then_stops_on_ekf_arrival(observer, monkeypatch):
     assert sent[-1][0] > 0. and sent[-1][1] < 0.
     assert node.navigation_status['ready']
     fixed_goal = node.goal_map.copy()
+    node.relocalization_result = {'outcome': 'timeout'}
     node.on_ekf_pose(pose_message(node, x=fixed_goal[0], stamp=node.stamp(msg)))
     node.tick()
     assert sent[-1] == (0., 0.)
@@ -124,7 +128,7 @@ def test_new_goal_representation_does_not_complete_a_physical_sidestep():
     # Even a large change of the final goal must not move a committed bypass target.
     controller.set_goal((100., -100.))
     pose = np.array([0., .1, math.pi / 2])
-    view = View([ObservedEmptySpace()], pose, [], controller.cfg, 0.)
+    view = View([ObservedEmptySpace()], pose, controller.cfg, 0.)
     v, w = controller.step(pose, view, .2)
     assert controller.state == 'SIDESTEP'
     assert v > 0.
@@ -217,3 +221,42 @@ def test_ekf_clock_regression_does_not_reuse_a_newer_alignment(observer):
     node.on_ekf_pose(pose_message(node, x=-2.3, stamp=node.stamp(msg) - .05))
     with pytest.raises(ValueError, match='time moved backwards'):
         node.update_navigation_goal(node.require_ekf_pose())
+
+
+def test_scan_loss_waits_without_fault_and_resumes_with_clearance_ramp(observer, monkeypatch):
+    from l2s3_curling.node import ScanUnavailable
+    node = observer
+    navigation_setup(node, (-2.2, 0., 0.), (1., 0., 0.))
+    node.controller.progress_at -= 100.
+    sent = []
+    monkeypatch.setattr(node, 'send', lambda v, w: sent.append((v, w)))
+    def missing_scan():
+        raise ScanUnavailable('scan missing/stale')
+    monkeypatch.setattr(node, 'prepare', missing_scan)
+    node.tick()
+    assert node.scan_hold and node.controller.active and sent[-1] == (0., 0.)
+    node.hold_since -= 30.
+    node.tick()
+    assert node.controller.active and sent[-1] == (0., 0.)
+    monkeypatch.setattr(node, 'prepare', lambda: clear_view(node))
+    node.tick()
+    assert node.controller.active and not node.scan_hold
+    assert sent[-1] == (0., 0.)
+    assert node.motion.clear_since is not None
+
+
+def test_non_scan_failure_after_scan_loss_still_faults(observer, monkeypatch):
+    from l2s3_curling.node import ScanUnavailable
+    node = observer
+    navigation_setup(node, (-2.2, 0., 0.), (1., 0., 0.))
+    monkeypatch.setattr(node, 'send', lambda *args: None)
+    def fail(error):
+        raise error
+    monkeypatch.setattr(node, 'prepare', lambda: fail(ScanUnavailable('scan missing/stale')))
+    node.tick()
+    monkeypatch.setattr(node, 'prepare', lambda: fail(ValueError('gyro missing/stale')))
+    node.tick()
+    assert not node.scan_hold and node.controller.active
+    node.hold_since -= 6.
+    node.tick()
+    assert node.controller.state == 'FAULT'

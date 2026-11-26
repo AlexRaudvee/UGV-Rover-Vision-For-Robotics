@@ -103,6 +103,7 @@ def test_approach_steers_towards_the_selected_target(observer, monkeypatch, targ
 def test_control_loop_stops_at_each_ekf_field_target(observer, monkeypatch, target):
     node = observer
     start_synthetic_mission(node, monkeypatch)
+    node.relocalization_result = {'outcome': 'timeout'}
     # Wheel/gyro displacement deliberately disagrees with travel across the field.
     matched_pose(node, target, (.4, .1, .2))
     sent = []
